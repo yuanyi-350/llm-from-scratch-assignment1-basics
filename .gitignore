@@ -1,3 +1,15 @@
+# 忽略 PyCharm/IntelliJ 的配置文件夹
+.idea/
+__pycache__/
+*.iml
+
+# 忽略所有 pickle 数据文件
+*.pkl
+*.npy
+
+# 忽略数据集文本
+*.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
