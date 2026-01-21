@@ -2,7 +2,7 @@
 .idea/
 __pycache__/
 *.iml
-
+*.xml
 # 忽略所有 pickle 数据文件
 *.pkl
 *.npy
@@ -55,8 +55,6 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
-nosetests.xml
-coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
