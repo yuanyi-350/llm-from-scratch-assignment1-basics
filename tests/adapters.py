@@ -540,6 +540,9 @@ def run_load_checkpoint(
     raise NotImplementedError
 
 
+
+from cs336_basics.tokenizer import Tokenizer, pre_tokenization, word_2_byte
+
 def get_tokenizer(
     vocab: dict[int, bytes],
     merges: list[tuple[bytes, bytes]],
@@ -560,7 +563,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    return Tokenizer(vocab, merges, special_tokens)
 
 from collections import Counter
 
@@ -597,63 +600,43 @@ def run_train_bpe(
         text = f.read()
     chunked_text = pre_tokenization(text, special_tokens)
     cnt_pretokens = Counter(map(word_2_byte, chunked_text))
+    for st in special_tokens:
+        del cnt_pretokens[word_2_byte(st)]
 
     merges = []
-    while len(vocab) < vocab_size:
+    for n in range(len(vocab), vocab_size):
         pair_cnt = Counter()
         for pretoken, cnt in cnt_pretokens.items():
-            for i in range(len(pretoken)-1):
-                pair_cnt[(pretoken[i], pretoken[i+1])] += cnt
+            for k in range(len(pretoken)-1):
+                pair_cnt[(pretoken[k], pretoken[k+1])] += cnt
         if not pair_cnt:
             break
         merge_pair = max(pair_cnt.items(), key=lambda kv: (kv[1], kv[0]))[0]
         merges.append(merge_pair)
-        n = len(vocab)
         new_token = merge_pair[0] + merge_pair[1]
         vocab[n] = new_token
 
-        change = []
+        new_cnt_pretokens = cnt_pretokens.copy()
         for pretoken, cnt in cnt_pretokens.items():
             if merge_pair[0] in pretoken:
-                i = 0
+                k = 0
                 new_pre_token = []
-                while i < len(pretoken):
-                    if pretoken[i:i+2] == merge_pair:
+                while k < len(pretoken):
+                    if pretoken[k:k+2] == merge_pair:
                         new_pre_token.append(new_token)
-                        i += 2
+                        k += 2
                     else:
-                        new_pre_token.append(pretoken[i])
-                        i += 1
+                        new_pre_token.append(pretoken[k])
+                        k += 1
                 new_pre_token = tuple(new_pre_token)
-                change.append([new_pre_token, pretoken, cnt])
-        for new_t, old_t, cnt in change:
-            cnt_pretokens[new_t] += cnt
-            cnt_pretokens[old_t] -= cnt
-            if cnt_pretokens[old_t] <= 0:
-                del cnt_pretokens[old_t]
-
+                new_cnt_pretokens[new_pre_token] += cnt
+                new_cnt_pretokens[pretoken] -= cnt
+                if new_cnt_pretokens[pretoken] <= 0:
+                    del new_cnt_pretokens[pretoken]
+        cnt_pretokens = new_cnt_pretokens
     return vocab, merges
 
-import regex as re
-def pre_tokenization(s: str, special_token: list[str]) -> list[str]:
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
-    if not special_token:
-        return re.findall(PAT, s)
-
-    toks = sorted(special_token, key=len, reverse=True)
-    union = "|".join(re.escape(t) for t in toks)
-    parts = re.split(f"({union})", s)
-
-    out = []
-    st = set(special_token)
-    for part in parts:
-        if not part:
-            continue
-        if part in st:
-            continue
-        out.extend(re.findall(PAT, part))
-    return out
 
 
 def _init_vocab(vocab: dict, special_token: list):
@@ -669,9 +652,3 @@ def _init_vocab(vocab: dict, special_token: list):
             vocab[idx] = init_str
             idx += 1
     return vocab
-
-@lru_cache
-def word_2_byte(word: str) -> tuple[bytes, ...]:
-    word_decoded = list(word.encode('UTF-8'))
-    word_byte = [bytes([b]) for b in word_decoded]
-    return tuple(word_byte)
