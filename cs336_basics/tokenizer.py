@@ -3,7 +3,7 @@ import pickle
 import regex as re
 from typing import Iterable, Iterator
 
-# @lru_cache(maxsize=1024)
+@lru_cache(maxsize=4096)
 def word_2_byte(word: str) -> tuple[bytes, ...]:
     word_decoded = list(word.encode('UTF-8'))
     word_byte = [bytes([b]) for b in word_decoded]
@@ -55,6 +55,37 @@ class Tokenizer:
 
         return cls(vocab, merges, special_tokens)
 
+    @lru_cache(4096)
+    def _encode_word(self, word : str) -> list[int] :
+        word_byte_list = list(word_2_byte(word))
+
+        while len(word_byte_list) > 1:
+            word_pairs = set((word_byte_list[k], word_byte_list[k + 1])
+                             for k in range(len(word_byte_list) - 1))
+            if not word_pairs:
+                break
+            bigram = min(word_pairs, key=lambda pair: self.merges_id.get(pair, float('inf')))
+            if bigram not in self.merges_id:
+                break
+            k = 0
+            new_byte_token = []
+            while k < len(word_byte_list):
+                if k < len(word_byte_list) - 1 and (word_byte_list[k], word_byte_list[k + 1]) == bigram:
+                    new_byte_token.append(bigram[0] + bigram[1])
+                    k += 2
+                else:
+                    new_byte_token.append(word_byte_list[k])
+                    k += 1
+            word_byte_list = new_byte_token
+
+        res = []
+        for merged_bytes in word_byte_list:
+            if merged_bytes in self.vocab_id:
+                res.append(self.vocab_id[merged_bytes])
+            else:
+                print(f"\033[33mWarning: {merged_bytes} not in vocab\033[0m")
+        return res
+
     def encode(self, text: str) -> list[int]:
         """Encode an input text into a sequence of token IDs.
         """
@@ -64,32 +95,7 @@ class Tokenizer:
             if part in self.special_tokens_set:
                 res.append(self.vocab_id[part.encode('utf-8')])
                 continue
-            word_byte_list = list(word_2_byte(part))
-
-            while len(word_byte_list) > 1:
-                word_pairs = set((word_byte_list[k], word_byte_list[k + 1])
-                                 for k in range(len(word_byte_list) - 1))
-                if not word_pairs:
-                    break
-                bigram = min(word_pairs, key=lambda pair: self.merges_id.get(pair, float('inf')))
-                if bigram not in self.merges_id:
-                    break
-                k = 0
-                new_byte_token = []
-                while k < len(word_byte_list):
-                    if k < len(word_byte_list) - 1 and (word_byte_list[k], word_byte_list[k + 1]) == bigram:
-                        new_byte_token.append(bigram[0] + bigram[1])
-                        k += 2
-                    else:
-                        new_byte_token.append(word_byte_list[k])
-                        k += 1
-                word_byte_list = new_byte_token
-
-            for merged_bytes in word_byte_list:
-                if merged_bytes in self.vocab_id:
-                    res.append(self.vocab_id[merged_bytes])
-                else:
-                    print(f"\033[33mWarning: {merged_bytes} not in vocab\033[0m")
+            res += self._encode_word(part)
         return res
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:

@@ -9,7 +9,7 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
-
+from cs336_basics.model import Linear, Embedding, SwiGLU, RotaryPositionalEmbedding
 
 def run_linear(
     d_in: int,
@@ -29,9 +29,10 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
-
+    model = Linear(d_in, d_out, device=weights.device, dtype=weights.dtype)
+    with torch.no_grad():
+        model.weight.copy_(weights.t())
+    return model(in_features)
 
 def run_embedding(
     vocab_size: int,
@@ -51,9 +52,10 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    raise NotImplementedError
-
+    model = Embedding(vocab_size, d_model, device=weights.device, dtype=weights.dtype)
+    with torch.no_grad():
+        model.weight.copy_(weights)
+    return model(token_ids)
 
 def run_swiglu(
     d_model: int,
@@ -77,15 +79,20 @@ def run_swiglu(
     Returns:
         Float[Tensor, "... d_model"]: Output embeddings of the same shape as the input embeddings.
     """
-    # Example:
-    # If your state dict keys match, you can use `load_state_dict()`
-    # swiglu.load_state_dict(weights)
-    # You can also manually assign the weights
-    # swiglu.w1.weight.data = w1_weight
-    # swiglu.w2.weight.data = w2_weight
-    # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    device = w1_weight.device
+    dtype = w1_weight.dtype
 
+    model = SwiGLU(d_model, device=w1_weight.device, dtype=w1_weight.dtype)
+    if model.d_ff != d_ff:
+        model.d_ff = d_ff
+        model.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        model.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+        model.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
+    with torch.no_grad():
+        model.w1.weight.copy_(w1_weight.t())
+        model.w2.weight.copy_(w2_weight.t())
+        model.w3.weight.copy_(w3_weight.t())
+    return model(in_features)
 
 def run_scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
@@ -201,7 +208,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    device = in_query_or_key.device
+    model = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device=device)
+    return model(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
