@@ -1,6 +1,6 @@
 import torch
 
-if __name__ == "main":
+if __name__ == "__main__":
     print(f"PyTorch版本: {torch.__version__}")
     print(f"XPU是否可用: {torch.xpu.is_available()}")
     print(f"可用XPU设备数: {torch.xpu.device_count()}")
