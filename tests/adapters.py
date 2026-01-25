@@ -82,12 +82,7 @@ def run_swiglu(
     device = w1_weight.device
     dtype = w1_weight.dtype
 
-    model = SwiGLU(d_model, device=w1_weight.device, dtype=w1_weight.dtype)
-    if model.d_ff != d_ff:
-        model.d_ff = d_ff
-        model.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
-        model.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
-        model.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
+    model = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
     with torch.no_grad():
         model.w1.weight.copy_(w1_weight.t())
         model.w2.weight.copy_(w2_weight.t())
@@ -189,8 +184,19 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    device = in_features.device
+    dtype = in_features.dtype
+    model = CausalMultiHeadSelfAttention(d_model, num_heads, device=device, dtype=dtype)
 
+    head_dim = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, head_dim, max_seq_len, device=device)
+
+    with torch.no_grad():
+        model.w_q.weight.copy_(q_proj_weight.T)
+        model.w_k.weight.copy_(k_proj_weight.T)
+        model.w_v.weight.copy_(v_proj_weight.T)
+        model.w_o.weight.copy_(o_proj_weight.T)
+    return model(in_features, rope_module=rope, token_positions=token_positions)
 
 def run_rope(
     d_k: int,
@@ -286,7 +292,28 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    device = in_features.device
+    dtype = in_features.dtype
+    batch_size, seq_len, _ = in_features.shape
+
+    block = TransformerBlock(d_model, num_heads, d_ff, device=device, dtype=dtype)
+
+    head_dim = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, head_dim, max_seq_len, device=device).to(dtype=dtype)
+
+    token_positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, seq_len)
+
+    with torch.no_grad():
+        block.mha.w_q.weight.copy_(weights['attn.q_proj.weight'].T) # (d_model, d_model)
+        block.mha.w_k.weight.copy_(weights['attn.k_proj.weight'].T)
+        block.mha.w_v.weight.copy_(weights['attn.v_proj.weight'].T)
+        block.mha.w_o.weight.copy_(weights['attn.output_proj.weight'].T)
+        block.norm1.weight.copy_(weights['ln1.weight'])
+        block.norm2.weight.copy_(weights['ln2.weight'])
+        block.ffn.w1.weight.copy_(weights['ffn.w1.weight'].T)
+        block.ffn.w2.weight.copy_(weights['ffn.w2.weight'].T)
+        block.ffn.w3.weight.copy_(weights['ffn.w3.weight'].T)
+    return block(in_features, rope_module=rope, token_positions=token_positions)
 
 
 def run_transformer_lm(
@@ -467,7 +494,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
