@@ -1,7 +1,12 @@
+import os
 import torch
+import numpy as np
 import torch.nn as nn
+import torch.optim as optim
+from torch.optim import Optimizer
 import math
 from einops import einsum, rearrange
+from typing import Union, BinaryIO, IO
 
 
 class Linear(nn.Module):
@@ -180,6 +185,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         return self.w_o(attn_out)
 
 
+
 class TransformerBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, device=None, dtype=None):
         super().__init__()
@@ -194,15 +200,9 @@ class TransformerBlock(nn.Module):
         x_norm = self.norm1(x)
         attn_out = self.mha(x_norm, rope_module=rope_module, token_positions=token_positions)
         h = h + attn_out
+        ffn_out = self.ffn(self.norm2(h))
+        return h + ffn_out
 
-        # x + FFN(Norm(x))
-        x_norm2 = self.norm2(h)
-        ffn_out = self.ffn(x_norm2)
-        out = h + ffn_out
-        return out
-
-
-import torch
 
 
 def cross_entropy(logits: torch.Tensor, true_labels: torch.Tensor) -> torch.Tensor:
@@ -224,3 +224,102 @@ def cross_entropy(logits: torch.Tensor, true_labels: torch.Tensor) -> torch.Tens
     true_logits = logits.gather(dim=-1, index=true_labels.unsqueeze(-1))
     loss = log_sum_exp - true_logits
     return loss.mean()
+
+
+
+
+class AdamW(Optimizer):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
+        for group in self.param_groups:
+            lr = group['lr']  # alpha in algorithm
+            beta1, beta2 = group['betas']
+            eps = group['eps']  # epsilon
+            weight_decay = group['weight_decay']  # lambda
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+                if grad.is_sparse:
+                    raise RuntimeError('AdamW does not support sparse gradients')
+
+                state = self.state[p]
+
+                # State initialization (m_0 = 0, v_0 = 0)
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['exp_avg'] = torch.zeros_like(p.data)  # m
+                    state['exp_avg_sq'] = torch.zeros_like(p.data)  # v
+
+                m = state['exp_avg']
+                v = state['exp_avg_sq']
+
+                state['step'] += 1
+                t = state['step']
+
+                # m <- beta1 * m + (1 - beta1) * g
+                m.mul_(beta1).add_(grad, alpha=1 - beta1)
+
+                # v <- beta2 * v + (1 - beta2) * g^2
+                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                # alpha_t calculation
+                bias_correction1 = 1 - beta1 ** t
+                bias_correction2 = 1 - beta2 ** t
+                # alpha_t = alpha * sqrt(1 - beta2^t) / (1 - beta1^t)
+                alpha_t = lr * math.sqrt(bias_correction2) / bias_correction1
+
+                # theta <- theta - alpha_t * m / (sqrt(v) + eps)
+                denom = v.sqrt().add_(eps)
+                p.data.addcdiv_(m, denom, value=-alpha_t)
+
+                # theta <- theta - alpha * lambda * theta
+                if weight_decay > 0:
+                    p.data.add_(p.data, alpha=-lr * weight_decay)
+        return loss
+
+
+
+def get_lr_cosine_schedule(t: int, alpha_max: float, alpha_min: float, T_w: int, T_c: int) -> float:
+    if t < T_w:
+        return (t / T_w) * alpha_max
+    elif t <= T_c:
+        progress = (t - T_w) / (T_c - T_w)
+        cosine_decay = 0.5 * (1 + math.cos(progress * math.pi))
+        return alpha_min + cosine_decay * (alpha_max - alpha_min)
+    else:
+        return alpha_min
+
+
+
+def gradient_clipping(parameters, max_norm: float, eps: float = 1e-6) -> None:
+    params_with_grad = [p for p in parameters if p.grad is not None]
+    if not params_with_grad:
+        return
+    total_norm_sq = sum(p.grad.data.norm(2).item() ** 2 for p in params_with_grad)
+    total_norm = total_norm_sq ** 0.5
+    if total_norm >= max_norm:
+        scale_factor = max_norm / (total_norm + eps)
+        for p in params_with_grad:
+            p.grad.data.mul_(scale_factor)
+
+
+def get_batch(x: np.ndarray, batch_size: int, context_length: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+    data_len = len(x)
+    high = data_len - context_length
+
+    ix = torch.randint(low=0, high=high, size=(batch_size,))
+    x_batch_np = [x[i: i + context_length] for i in ix]
+    y_batch_np = [x[i + 1: i + context_length + 1] for i in ix]
+
+    x_batch = torch.tensor(np.array(x_batch_np), dtype=torch.long, device=device)
+    y_batch = torch.tensor(np.array(y_batch_np), dtype=torch.long, device=device)
+    return x_batch, y_batch
+

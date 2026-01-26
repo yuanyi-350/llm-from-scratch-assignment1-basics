@@ -34,6 +34,8 @@ def run_linear(
         model.weight.copy_(weights.t())
     return model(in_features)
 
+
+
 def run_embedding(
     vocab_size: int,
     d_model: int,
@@ -56,6 +58,8 @@ def run_embedding(
     with torch.no_grad():
         model.weight.copy_(weights)
     return model(token_ids)
+
+
 
 def run_swiglu(
     d_model: int,
@@ -144,7 +148,17 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    device = in_features.device
+    dtype = in_features.dtype
+    model = CausalMultiHeadSelfAttention(d_model, num_heads, device=device, dtype=dtype)
+
+    with torch.no_grad():
+        model.w_q.weight.copy_(q_proj_weight.T)
+        model.w_k.weight.copy_(k_proj_weight.T)
+        model.w_v.weight.copy_(v_proj_weight.T)
+        model.w_o.weight.copy_(o_proj_weight.T)
+    return model(in_features, rope_module=None, token_positions=None)
+
 
 
 def run_multihead_self_attention_with_rope(
@@ -197,6 +211,8 @@ def run_multihead_self_attention_with_rope(
         model.w_v.weight.copy_(v_proj_weight.T)
         model.w_o.weight.copy_(o_proj_weight.T)
     return model(in_features, rope_module=rope, token_positions=token_positions)
+
+
 
 def run_rope(
     d_k: int,
@@ -459,7 +475,8 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return get_batch(dataset, batch_size, context_length, device)
+
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -506,14 +523,16 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
+
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
+
 
 
 def run_get_lr_cosine_schedule(
@@ -541,7 +560,8 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return get_lr_cosine_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
+
 
 
 def run_save_checkpoint(
@@ -560,7 +580,13 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    checkpoint_state = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'iteration': iteration
+    }
+    torch.save(checkpoint_state, out)
+
 
 
 def run_load_checkpoint(
@@ -581,7 +607,10 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    checkpoint_state = torch.load(src)
+    model.load_state_dict(checkpoint_state['model_state_dict'])
+    optimizer.load_state_dict(checkpoint_state['optimizer_state_dict'])
+    return checkpoint_state['iteration']
 
 
 
