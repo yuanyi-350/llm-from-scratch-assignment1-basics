@@ -204,6 +204,58 @@ class TransformerBlock(nn.Module):
         return h + ffn_out
 
 
+class TransformerLM(nn.Module):
+    def __init__(self, vocab_size: int, context_length: int, d_model: int, num_layers: int, num_heads: int, d_ff: int,
+            attn_pdrop: float = 0.0, resid_pdrop: float = 0.0, device=None, dtype=None):
+        """
+        Transformer Language Model.
+
+        Args:
+            vocab_size: Size of the vocabulary.
+            context_length: Maximum context length (for RoPE or Positional Embeddings).
+            d_model: Dimensionality of the model.
+            num_layers: Number of Transformer blocks.
+            num_heads: Number of attention heads.
+            d_ff: Dimensionality of the feed-forward inner layer.
+        """
+        super().__init__()
+        self.context_length = context_length
+        self.d_model = d_model
+        self.token_embeddings = Embedding(vocab_size, d_model, device=device, dtype=dtype)
+
+        head_dim = d_model // num_heads
+        self.rope = RotaryPositionalEmbedding(theta=10000.0, d_k=head_dim, max_seq_len=context_length, device=device)
+
+        self.layers = nn.ModuleList([
+            TransformerBlock(d_model, num_heads, d_ff, device=device, dtype=dtype)
+            for _ in range(num_layers)
+        ])
+
+        self.norm_final = RMSNorm(d_model, device=device, dtype=dtype)
+
+        self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            input_ids: (batch_size, seq_len)
+        Returns:
+            logits: (batch_size, seq_len, vocab_size)
+        """
+        batch_size, seq_len = input_ids.shape
+
+        x = self.token_embeddings(input_ids)  # (batch, seq, d_model)
+
+        token_positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, seq_len)
+
+        for block in self.layers:
+            x = block(x, rope_module=self.rope, token_positions=token_positions)
+
+        x = self.norm_final(x)
+        return self.lm_head(x)  # (batch, seq, vocab_size)
+
+
+
 
 def cross_entropy(logits: torch.Tensor, true_labels: torch.Tensor) -> torch.Tensor:
     """
@@ -224,7 +276,6 @@ def cross_entropy(logits: torch.Tensor, true_labels: torch.Tensor) -> torch.Tens
     true_logits = logits.gather(dim=-1, index=true_labels.unsqueeze(-1))
     loss = log_sum_exp - true_logits
     return loss.mean()
-
 
 
 
@@ -251,38 +302,28 @@ class AdamW(Optimizer):
                     raise RuntimeError('AdamW does not support sparse gradients')
 
                 state = self.state[p]
-
-                # State initialization (m_0 = 0, v_0 = 0)
                 if len(state) == 0:
                     state['step'] = 0
-                    state['exp_avg'] = torch.zeros_like(p.data)  # m
-                    state['exp_avg_sq'] = torch.zeros_like(p.data)  # v
+                    state['exp_avg'] = torch.zeros_like(p.data) # m
+                    state['exp_avg_sq'] = torch.zeros_like(p.data) # v
 
                 m = state['exp_avg']
                 v = state['exp_avg_sq']
-
                 state['step'] += 1
                 t = state['step']
 
-                # m <- beta1 * m + (1 - beta1) * g
-                m.mul_(beta1).add_(grad, alpha=1 - beta1)
+                m.mul_(beta1).add_(grad, alpha=1 - beta1) # m <- beta1 * m + (1 - beta1) * g
+                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2) # v <- beta2 * v + (1 - beta2) * g^2
 
-                # v <- beta2 * v + (1 - beta2) * g^2
-                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-
-                # alpha_t calculation
                 bias_correction1 = 1 - beta1 ** t
                 bias_correction2 = 1 - beta2 ** t
                 # alpha_t = alpha * sqrt(1 - beta2^t) / (1 - beta1^t)
                 alpha_t = lr * math.sqrt(bias_correction2) / bias_correction1
 
-                # theta <- theta - alpha_t * m / (sqrt(v) + eps)
                 denom = v.sqrt().add_(eps)
-                p.data.addcdiv_(m, denom, value=-alpha_t)
-
-                # theta <- theta - alpha * lambda * theta
+                p.data.addcdiv_(m, denom, value=-alpha_t) # theta <- theta - alpha_t * m / (sqrt(v) + eps)
                 if weight_decay > 0:
-                    p.data.add_(p.data, alpha=-lr * weight_decay)
+                    p.data.add_(p.data, alpha=-lr * weight_decay) # theta <- theta - alpha * lambda * theta
         return loss
 
 

@@ -411,7 +411,50 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    device = in_indices.device
+    dtype = weights['token_embeddings.weight'].dtype
+
+    model = TransformerLM(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        device=device,
+        dtype=dtype
+    )
+
+    head_dim = d_model // num_heads
+    model.rope = RotaryPositionalEmbedding(
+        theta=rope_theta,
+        d_k=head_dim,
+        max_seq_len=context_length,
+        device=device
+    ).to(dtype=dtype)
+
+    with torch.no_grad():
+        model.token_embeddings.weight.copy_(weights['token_embeddings.weight'])
+
+        for i in range(num_layers):
+            block = model.layers[i]
+            prefix = f"layers.{i}."
+
+            block.mha.w_q.weight.copy_(weights[f"{prefix}attn.q_proj.weight"].T)
+            block.mha.w_k.weight.copy_(weights[f"{prefix}attn.k_proj.weight"].T)
+            block.mha.w_v.weight.copy_(weights[f"{prefix}attn.v_proj.weight"].T)
+            block.mha.w_o.weight.copy_(weights[f"{prefix}attn.output_proj.weight"].T)
+
+            block.norm1.weight.copy_(weights[f"{prefix}ln1.weight"])
+            block.norm2.weight.copy_(weights[f"{prefix}ln2.weight"])
+
+            block.ffn.w1.weight.copy_(weights[f"{prefix}ffn.w1.weight"].T)
+            block.ffn.w2.weight.copy_(weights[f"{prefix}ffn.w2.weight"].T)
+            block.ffn.w3.weight.copy_(weights[f"{prefix}ffn.w3.weight"].T)
+
+        model.norm_final.weight.copy_(weights['ln_final.weight'])
+        model.lm_head.weight.copy_(weights['lm_head.weight'].T)
+    return model(in_indices)
 
 
 def run_rmsnorm(
