@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
-from functools import lru_cache
 from typing import IO, Any, BinaryIO
 
 import numpy.typing as npt
@@ -10,6 +9,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from cs336_basics.model import *
+from cs336_basics.tokenizer import *
 
 def run_linear(
     d_in: int,
@@ -657,8 +657,6 @@ def run_load_checkpoint(
 
 
 
-from cs336_basics.tokenizer import Tokenizer, pre_tokenization, word_2_byte
-
 def get_tokenizer(
     vocab: dict[int, bytes],
     merges: list[tuple[bytes, bytes]],
@@ -681,7 +679,7 @@ def get_tokenizer(
     """
     return Tokenizer(vocab, merges, special_tokens)
 
-from collections import Counter
+
 
 def run_train_bpe(
     input_path: str | os.PathLike,
@@ -710,61 +708,4 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    vocab = _init_vocab({}, special_tokens)
-
-    with open(input_path, 'r', encoding='UTF-8') as f:
-        text = f.read()
-    chunked_text = pre_tokenization(text, special_tokens)
-    cnt_pretokens = Counter(map(word_2_byte, chunked_text))
-    for st in special_tokens:
-        del cnt_pretokens[word_2_byte(st)]
-
-    merges = []
-    for n in range(len(vocab), vocab_size):
-        pair_cnt = Counter()
-        for pretoken, cnt in cnt_pretokens.items():
-            for k in range(len(pretoken)-1):
-                pair_cnt[(pretoken[k], pretoken[k+1])] += cnt
-        if not pair_cnt:
-            break
-        merge_pair = max(pair_cnt.items(), key=lambda kv: (kv[1], kv[0]))[0]
-        merges.append(merge_pair)
-        new_token = merge_pair[0] + merge_pair[1]
-        vocab[n] = new_token
-
-        new_cnt_pretokens = cnt_pretokens.copy()
-        for pretoken, cnt in cnt_pretokens.items():
-            if merge_pair[0] in pretoken:
-                k = 0
-                new_pre_token = []
-                while k < len(pretoken):
-                    if pretoken[k:k+2] == merge_pair:
-                        new_pre_token.append(new_token)
-                        k += 2
-                    else:
-                        new_pre_token.append(pretoken[k])
-                        k += 1
-                new_pre_token = tuple(new_pre_token)
-                new_cnt_pretokens[new_pre_token] += cnt
-                new_cnt_pretokens[pretoken] -= cnt
-                if new_cnt_pretokens[pretoken] <= 0:
-                    del new_cnt_pretokens[pretoken]
-        cnt_pretokens = new_cnt_pretokens
-    return vocab, merges
-
-
-
-
-def _init_vocab(vocab: dict, special_token: list):
-    special_token_encoded = [s.encode('UTF-8') for s in special_token]
-    idx = 0
-    for code in special_token_encoded:
-        vocab[idx] = code
-        idx += 1
-
-    for i in range(256):
-        init_str = bytes([i])
-        if init_str not in vocab.values():
-            vocab[idx] = init_str
-            idx += 1
-    return vocab
+    return train_bpe(input_path, vocab_size, special_tokens)
