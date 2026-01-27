@@ -1,9 +1,12 @@
 from functools import lru_cache
 import pickle
 import os
+import multiprocessing
+import time
 import regex as re
 from typing import Iterable, Iterator
 from collections import Counter
+from cs336_basics.pretokenization_example import find_chunk_boundaries
 
 @lru_cache(maxsize=4096) # 评测机如果超内存就去掉这个
 def word_2_byte(word: str) -> tuple[bytes, ...]:
@@ -28,10 +31,39 @@ def pre_tokenization(s: str, special_token: list[str]) -> list[str]:
             continue
         if part in st:
             out.append(part)
-
         else:
             out.extend(re.findall(PAT, part))
     return out
+
+
+def _pretoken_worker_wrapper(args):
+    input_path, start, end, special_tokens = args
+    local_counter = Counter()
+    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+    toks = sorted(special_tokens, key=len, reverse=True)
+    union = "|".join(re.escape(t) for t in toks)
+    splitter = re.compile(f"({union})")
+    pat_regex = re.compile(PAT)
+    special_tokens_set = set(special_tokens)
+
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        data = f.read(end - start)
+
+    text = data.decode("utf-8", errors="replace")
+    parts = splitter.split(text)
+
+    for part in parts:
+        if not part:
+            continue
+        if part in special_tokens_set:
+            continue
+        for m in pat_regex.finditer(part):
+            token = word_2_byte(m.group(0))
+            local_counter[token] += 1
+    return local_counter
+
 
 
 class Tokenizer:
@@ -116,17 +148,44 @@ def train_bpe(
     special_tokens: list[str],
     **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    num_processes = kwargs.get('num_processes')
+    verbose = kwargs.get('verbose', False)
     vocab = _init_vocab({}, special_tokens)
 
-    with open(input_path, 'r', encoding='UTF-8') as f:
-        text = f.read()
-    chunked_text = pre_tokenization(text, special_tokens)
-    cnt_pretokens = Counter(map(word_2_byte, chunked_text))
-    for st in special_tokens:
-        del cnt_pretokens[word_2_byte(st)]
+    if verbose:
+        start_time = time.time()
+
+    if not num_processes:
+        with open(input_path, 'r', encoding='UTF-8') as f:
+            text = f.read()
+        chunked_text = pre_tokenization(text, special_tokens)
+        cnt_pretokens = Counter(map(word_2_byte, chunked_text))
+        for st in special_tokens:
+            del cnt_pretokens[word_2_byte(st)]
+    else:
+        with open(input_path, "rb") as f:
+            boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+
+        tasks = []
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            tasks.append((input_path, start, end, special_tokens))
+        cnt_pretokens = Counter()
+
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            for local_cnt in pool.imap_unordered(_pretoken_worker_wrapper, tasks, chunksize=1):
+                cnt_pretokens.update(local_cnt)
+    if verbose:
+        count_duration = time.time() - start_time
+        unique_pretokens = len(cnt_pretokens)
+        total_pretokens = sum(cnt_pretokens.values())
+        print(f"Pre-tokenization complete in {count_duration:.2f}s")
+        print(f"Statistics: {unique_pretokens} unique pre-tokens, {total_pretokens} total tokens.")
 
     merges = []
     for n in range(len(vocab), vocab_size):
+        if verbose and n % 500 == 0:
+            count_duration = time.time() - start_time
+            print(f"Merging token {n}/{vocab_size} | Time: {count_duration:.2f}s")
         pair_cnt = Counter()
         for pretoken, cnt in cnt_pretokens.items():
             for k in range(len(pretoken)-1):
@@ -138,23 +197,22 @@ def train_bpe(
         new_token = merge_pair[0] + merge_pair[1]
         vocab[n] = new_token
 
-        new_cnt_pretokens = cnt_pretokens.copy()
+        new_cnt_pretokens = {}
         for pretoken, cnt in cnt_pretokens.items():
-            if merge_pair[0] in pretoken:
-                k = 0
-                new_pre_token = []
-                while k < len(pretoken):
-                    if pretoken[k:k+2] == merge_pair:
-                        new_pre_token.append(new_token)
-                        k += 2
-                    else:
-                        new_pre_token.append(pretoken[k])
-                        k += 1
-                new_pre_token = tuple(new_pre_token)
+            new_pre_token = []
+            k = 0
+            while k < len(pretoken):
+                if k < len(pretoken) - 1 and (pretoken[k], pretoken[k + 1]) == merge_pair:
+                    new_pre_token.append(new_token)
+                    k += 2
+                else:
+                    new_pre_token.append(pretoken[k])
+                    k += 1
+            new_pre_token = tuple(new_pre_token)
+            if new_pre_token in new_cnt_pretokens:
                 new_cnt_pretokens[new_pre_token] += cnt
-                new_cnt_pretokens[pretoken] -= cnt
-                if new_cnt_pretokens[pretoken] <= 0:
-                    del new_cnt_pretokens[pretoken]
+            else:
+                new_cnt_pretokens[new_pre_token] = cnt
         cnt_pretokens = new_cnt_pretokens
     return vocab, merges
 
