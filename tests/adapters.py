@@ -623,13 +623,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    checkpoint_state = {
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'iteration': iteration
-    }
-    torch.save(checkpoint_state, out)
-
+    return save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -650,10 +644,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    checkpoint_state = torch.load(src)
-    model.load_state_dict(checkpoint_state['model_state_dict'])
-    optimizer.load_state_dict(checkpoint_state['optimizer_state_dict'])
-    return checkpoint_state['iteration']
+    return load_checkpoint(src, model, optimizer)
 
 
 

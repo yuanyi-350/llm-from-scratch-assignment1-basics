@@ -364,3 +364,22 @@ def get_batch(x: np.ndarray, batch_size: int, context_length: int, device: str) 
     y_batch = torch.tensor(np.array(y_batch_np), dtype=torch.long, device=device)
     return x_batch, y_batch
 
+
+
+def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, iteration: int,
+                        out: str | os.PathLike | BinaryIO | IO[bytes]):
+    checkpoint_state = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'iteration': iteration
+    }
+    torch.save(checkpoint_state, out)
+
+
+
+def load_checkpoint(src: str | os.PathLike | BinaryIO | IO[bytes], model: torch.nn.Module,
+                    optimizer: torch.optim.Optimizer) -> int:
+    checkpoint_state = torch.load(src)
+    model.load_state_dict(checkpoint_state['model_state_dict'])
+    optimizer.load_state_dict(checkpoint_state['optimizer_state_dict'])
+    return checkpoint_state['iteration']
