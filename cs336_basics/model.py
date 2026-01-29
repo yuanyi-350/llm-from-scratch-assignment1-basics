@@ -2,11 +2,10 @@ import os
 import torch
 import numpy as np
 import torch.nn as nn
-import torch.optim as optim
 from torch.optim import Optimizer
 import math
 from einops import einsum, rearrange
-from typing import Union, BinaryIO, IO
+from typing import BinaryIO, IO
 
 
 class Linear(nn.Module):
@@ -105,8 +104,12 @@ class RotaryPositionalEmbedding(nn.Module):
         x1 = x_reshaped[..., 0] # shape: (..., d/2)
         x2 = x_reshaped[..., 1] # shape: (..., d/2)
 
-        cos = self.cos_cached[token_positions] # shape: (..., d/2)
-        sin = self.sin_cached[token_positions] # shape: (..., d/2)
+        cos = self.cos_cached[token_positions]
+        sin = self.sin_cached[token_positions]
+
+        if x1.ndim == 4 and cos.ndim == 3:
+            cos = cos.unsqueeze(1)
+            sin = sin.unsqueeze(1)
 
         x1_new = x1 * cos - x2 * sin
         x2_new = x1 * sin + x2 * cos

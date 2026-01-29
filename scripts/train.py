@@ -106,9 +106,9 @@ def main():
         num_layers=args.num_layers,
         d_model=args.d_model,
         num_heads=args.num_heads,
-        rope_theta=args.rope_theta,
-        d_ff=args.d_ff
-    ).to(device)
+        d_ff=args.d_ff,
+        device=device
+    )
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model initialized with {total_params} parameters")
@@ -178,9 +178,8 @@ def main():
             device=device
         )
 
-        # Move to device
-        input_ids = input_ids.long().to(device)
-        target_ids = target_ids.long().to(device)
+        input_ids = input_ids.long()
+        target_ids = target_ids.long()
 
         # Forward pass
         optimizer.zero_grad()
@@ -238,11 +237,12 @@ def main():
                     val_input_ids, val_target_ids = get_batch(
                         val_data,
                         args.batch_size,
-                        args.context_len
+                        args.context_len,
+                        device=device
                     )
 
-                    val_input_ids = torch.from_numpy(val_input_ids).long().to(device)
-                    val_target_ids = torch.from_numpy(val_target_ids).long().to(device)
+                    val_input_ids = val_input_ids.long()
+                    val_target_ids = val_target_ids.long()
 
                     val_logits = model(val_input_ids)
                     val_logits_flat = val_logits.view(-1, val_logits.size(-1))

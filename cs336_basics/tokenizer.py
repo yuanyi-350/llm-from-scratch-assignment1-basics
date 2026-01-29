@@ -5,7 +5,7 @@ import multiprocessing
 import time
 import regex as re
 from typing import Iterable, Iterator
-from collections import Counter
+from collections import Counter, defaultdict
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 
 @lru_cache(maxsize=4096) # 评测机如果超内存就去掉这个
@@ -143,10 +143,10 @@ class Tokenizer:
         return byte_list.decode('UTF-8', errors='replace')
 
 def train_bpe(
-    input_path: str | os.PathLike,
-    vocab_size: int,
-    special_tokens: list[str],
-    **kwargs,
+        input_path: str | os.PathLike,
+        vocab_size: int,
+        special_tokens: list[str],
+        **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     num_processes = kwargs.get('num_processes')
     verbose = kwargs.get('verbose', False)
@@ -182,38 +182,57 @@ def train_bpe(
         print(f"Statistics: {unique_pretokens} unique pre-tokens, {total_pretokens} total tokens.")
 
     merges = []
+    words = [[list(k), v] for k, v in cnt_pretokens.items()]
+    token_to_idx = defaultdict(set)
+    pair_counts = Counter()
+
+    for idx, (tokens, count) in enumerate(words):
+        for i in range(len(tokens) - 1):
+            pair_counts[(tokens[i], tokens[i + 1])] += count
+        for token in tokens:
+            token_to_idx[token].add(idx)
+
     for n in range(len(vocab), vocab_size):
         if verbose and n % 500 == 0:
             count_duration = time.time() - start_time
             print(f"Merging token {n}/{vocab_size} | Time: {count_duration:.2f}s")
-        pair_cnt = Counter()
-        for pretoken, cnt in cnt_pretokens.items():
-            for k in range(len(pretoken)-1):
-                pair_cnt[(pretoken[k], pretoken[k+1])] += cnt
-        if not pair_cnt:
+
+        if not pair_counts:
             break
-        merge_pair = max(pair_cnt.items(), key=lambda kv: (kv[1], kv[0]))[0]
-        merges.append(merge_pair)
-        new_token = merge_pair[0] + merge_pair[1]
+
+        best_pair = max(pair_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+        if pair_counts[best_pair] <= 0:
+            del pair_counts[best_pair]
+            continue
+
+        merges.append(best_pair)
+        new_token = best_pair[0] + best_pair[1]
         vocab[n] = new_token
 
-        new_cnt_pretokens = {}
-        for pretoken, cnt in cnt_pretokens.items():
-            new_pre_token = []
-            k = 0
-            while k < len(pretoken):
-                if k < len(pretoken) - 1 and (pretoken[k], pretoken[k + 1]) == merge_pair:
-                    new_pre_token.append(new_token)
-                    k += 2
+        p0, p1 = best_pair
+        affected_indices = token_to_idx[p0] & token_to_idx[p1]
+
+        for idx in affected_indices:
+            tokens, count = words[idx]
+            i = 0
+            while i < len(tokens) - 1:
+                if tokens[i] == p0 and tokens[i + 1] == p1:
+                    if i > 0:
+                        pair_counts[(tokens[i - 1], p0)] -= count
+                    if i < len(tokens) - 2:
+                        pair_counts[(p1, tokens[i + 2])] -= count
+                    pair_counts[best_pair] -= count
+                    tokens[i] = new_token
+                    del tokens[i + 1]
+                    if i > 0:
+                        pair_counts[(tokens[i - 1], new_token)] += count
+                    if i < len(tokens) - 1:
+                        pair_counts[(new_token, tokens[i + 1])] += count
+                    token_to_idx[new_token].add(idx)
                 else:
-                    new_pre_token.append(pretoken[k])
-                    k += 1
-            new_pre_token = tuple(new_pre_token)
-            if new_pre_token in new_cnt_pretokens:
-                new_cnt_pretokens[new_pre_token] += cnt
-            else:
-                new_cnt_pretokens[new_pre_token] = cnt
-        cnt_pretokens = new_cnt_pretokens
+                    i += 1
+        del pair_counts[best_pair]
     return vocab, merges
 
 
