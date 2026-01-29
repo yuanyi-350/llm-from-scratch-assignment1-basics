@@ -1,9 +1,13 @@
+"""
+OWT 使用 heap 开始会很慢, 后面会非常快, 完整跑完需要 20min
+"""
 from functools import lru_cache
 import pickle
 import os
 import multiprocessing
 import time
 import regex as re
+import heapq
 from typing import Iterable, Iterator
 from collections import Counter, defaultdict
 from cs336_basics.pretokenization_example import find_chunk_boundaries
@@ -142,6 +146,20 @@ class Tokenizer:
         byte_list = b''.join(self.vocab[k] for k in ids)
         return byte_list.decode('UTF-8', errors='replace')
 
+
+
+class MaxHeapItem:
+    __slots__ = ['count', 'pair']
+    def __init__(self, count, pair):
+        self.count = count
+        self.pair = pair
+    def __lt__(self, other):
+        if self.count != other.count:
+            return self.count > other.count
+        return self.pair > other.pair
+
+
+
 def train_bpe(
         input_path: str | os.PathLike,
         vocab_size: int,
@@ -192,19 +210,23 @@ def train_bpe(
         for token in tokens:
             token_to_idx[token].add(idx)
 
+    heap = []
+    for pair, count in pair_counts.items():
+        heapq.heappush(heap, MaxHeapItem(count, pair))
+
     for n in range(len(vocab), vocab_size):
         if verbose and n % 500 == 0:
             count_duration = time.time() - start_time
             print(f"Merging token {n}/{vocab_size} | Time: {count_duration:.2f}s")
 
-        if not pair_counts:
+        best_pair = None
+        while heap:
+            item = heapq.heappop(heap)
+            if item.count == pair_counts[item.pair]:
+                best_pair = item.pair
+                break
+        if not best_pair:
             break
-
-        best_pair = max(pair_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
-
-        if pair_counts[best_pair] <= 0:
-            del pair_counts[best_pair]
-            continue
 
         merges.append(best_pair)
         new_token = best_pair[0] + best_pair[1]
@@ -219,22 +241,29 @@ def train_bpe(
             while i < len(tokens) - 1:
                 if tokens[i] == p0 and tokens[i + 1] == p1:
                     if i > 0:
-                        pair_counts[(tokens[i - 1], p0)] -= count
+                        prev_pair = (tokens[i - 1], p0)
+                        pair_counts[prev_pair] -= count
+                        heapq.heappush(heap, MaxHeapItem(pair_counts[prev_pair], prev_pair))
                     if i < len(tokens) - 2:
-                        pair_counts[(p1, tokens[i + 2])] -= count
+                        next_pair = (p1, tokens[i + 2])
+                        pair_counts[next_pair] -= count
+                        heapq.heappush(heap, MaxHeapItem(pair_counts[next_pair], next_pair))
                     pair_counts[best_pair] -= count
                     tokens[i] = new_token
                     del tokens[i + 1]
                     if i > 0:
-                        pair_counts[(tokens[i - 1], new_token)] += count
+                        new_prev_pair = (tokens[i - 1], new_token)
+                        pair_counts[new_prev_pair] += count
+                        heapq.heappush(heap, MaxHeapItem(pair_counts[new_prev_pair], new_prev_pair))
                     if i < len(tokens) - 1:
-                        pair_counts[(new_token, tokens[i + 1])] += count
+                        new_next_pair = (new_token, tokens[i + 1])
+                        pair_counts[new_next_pair] += count
+                        heapq.heappush(heap, MaxHeapItem(pair_counts[new_next_pair], new_next_pair))
                     token_to_idx[new_token].add(idx)
                 else:
                     i += 1
         del pair_counts[best_pair]
     return vocab, merges
-
 
 
 
