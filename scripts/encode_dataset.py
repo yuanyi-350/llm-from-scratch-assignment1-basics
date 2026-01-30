@@ -1,84 +1,95 @@
 import pickle
-import os
-from pathlib import Path
-from cs336_basics.tokenizer import Tokenizer
-import numpy as np
+import time
 from tqdm import tqdm
+import argparse
+import numpy as np
+from pathlib import Path
+from multiprocessing import Pool
+from cs336_basics.tokenizer import Tokenizer
+from cs336_basics.pretokenization_example import find_chunk_boundaries
+
+global_tokenizer = None
 
 
+def init_worker(vocab_path, merges_path, special_tokens):
+    global global_tokenizer
+    with open(vocab_path, 'rb') as f:
+        vocab = pickle.load(f)
+    with open(merges_path, 'rb') as f:
+        merges = pickle.load(f)
+    global_tokenizer = Tokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
 
 
-TOKENIZER_DIR = Path("./data")
-VOCAB_PATH = os.path.join(TOKENIZER_DIR, "tinystories_vocab.pkl")
-MERGES_PATH = os.path.join(TOKENIZER_DIR, "tinystories_merges.pkl")
-#
-DATA_DIR = Path("../TinyStories")
-TRAIN_TXT_DATA_PATH = DATA_DIR / "TinyStoriesV2-GPT4-train.txt"
-VAL_TXT_DATA_PATH = DATA_DIR / "TinyStoriesV2-GPT4-valid.txt"
-TRAIN_DATA_PATH = os.path.join(DATA_DIR, "train.dat")
-VAL_DATA_PATH = os.path.join(DATA_DIR, "valid.dat")
-
-special_tokens = ["<|endoftext|>"]
-
-with open(VOCAB_PATH, 'rb') as f:
-    vocab = pickle.load(f)
-with open(MERGES_PATH, 'rb') as f:
-    merges = pickle.load(f)
-
-tokenizer = Tokenizer(
-    vocab=vocab,
-    merges=merges,
-    special_tokens=special_tokens
-)
-
-print("=== 测试 Tokenizer ===")
-test_texts = [
-    "Once upon a time, there was a little robot.",
-    "Hello world! <|endoftext|> Some more text.",
-    "<|endoftext|>",
-    "你好，世界！"
-]
-
-for text in test_texts:
-    print(f"\n原文: {text}")
-    encoded = tokenizer.encode(text)
-    print("编码:", encoded)
-
-    byte_tokens = [tokenizer.vocab[token_id] for token_id in encoded]
-    str_tokens = [b.decode("utf-8", errors="replace") for b in byte_tokens]
-    print("分词（可读）:", str_tokens)
-
-    decoded = tokenizer.decode(encoded)
-    print("解码:", decoded)
-    print("是否完全还原:", decoded == text)
+def count_tokens(task):
+    path_to_txt, start_byte, end_byte = task
+    with open(path_to_txt, 'rb') as f:
+        f.seek(start_byte)
+        chunk_data = f.read(end_byte - start_byte)
+        text = chunk_data.decode("utf-8", errors="ignore")
+        ids = global_tokenizer.encode(text)
+        return len(ids)
 
 
-def encode_txt_as_numpy_array(tokenizer, path_to_txt, save_path):
-    with open(path_to_txt, 'r') as f:
-        num_lines = sum(1 for _ in f)
-
-    total_tokens = 0
-    with open(path_to_txt, 'r') as f:
-        for line in tqdm(f, total=num_lines, desc="Counting tokens"):
-            total_tokens += len(tokenizer.encode(line))
-
-    dtype = np.int16
-    tokens_mm = np.memmap(save_path, dtype=dtype, mode='w+', shape=(total_tokens,))
-
-    pos = 0
-    with open(path_to_txt, 'r') as f:
-        for line in tqdm(f, total=num_lines, desc="Tokenizing"):
-            ids = tokenizer.encode(line)
-            n = len(ids)
-            tokens_mm[pos:pos + n] = ids
-            pos += n
-
+def write_tokens(task):
+    path_to_txt, save_path, start_byte, end_byte, mm_start_idx, dtype, total_shape = task
+    with open(path_to_txt, 'rb') as f:
+        f.seek(start_byte)
+        chunk_data = f.read(end_byte - start_byte)
+        text = chunk_data.decode("utf-8", errors="ignore")
+        ids = global_tokenizer.encode(text)
+    tokens_mm = np.memmap(save_path, dtype=dtype, mode='r+', shape=total_shape)
+    tokens_mm[mm_start_idx: mm_start_idx + len(ids)] = ids
     tokens_mm.flush()
+    return True
 
-
-def main():
-    encode_txt_as_numpy_array(tokenizer, TRAIN_TXT_DATA_PATH, TRAIN_DATA_PATH)
-    encode_txt_as_numpy_array(tokenizer, VAL_TXT_DATA_PATH, VAL_DATA_PATH)
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", type=str, required=True)
+    parser.add_argument("--output", type=str, default="./data/owt_train.dat")
+    parser.add_argument("--tokenizer_dir", type=str, default="./data")
+    parser.add_argument("--num_workers", type=int, default=4)
+    args = parser.parse_args()
+
+    start_time = time.time()
+
+    vocab_path = Path(args.tokenizer_dir) / "owt_train_vocab.pkl"
+    merges_path = Path(args.tokenizer_dir) / "owt_train_merges.pkl"
+    abs_output_path = Path(args.output).absolute()
+    abs_output_path.parent.mkdir(parents=True, exist_ok=True)
+    special_tokens = ["<|endoftext|>"]
+    dtype = np.int16
+
+    with open(args.input, "rb") as f:
+        boundaries = find_chunk_boundaries(f, args.num_workers, b"<|endoftext|>")
+
+    chunk_tasks = []
+    for i in range(len(boundaries) - 1):
+        chunk_tasks.append((args.input, boundaries[i], boundaries[i + 1]))
+
+    with Pool(processes=args.num_workers, initializer=init_worker,
+              initargs=(vocab_path, merges_path, special_tokens)) as pool:
+        counts = list(tqdm(pool.imap(count_tokens, chunk_tasks), total=len(chunk_tasks), desc="Counting tokens"))
+
+    total_tokens = sum(counts)
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+
+    tokens_mm_init = np.memmap(args.output, dtype=dtype, mode='w+', shape=(total_tokens,))
+    del tokens_mm_init
+
+    offsets = np.cumsum([0] + counts)[:-1]
+    write_tasks = []
+    for i in range(len(chunk_tasks)):
+        write_tasks.append((
+            args.input, args.output, chunk_tasks[i][1], chunk_tasks[i][2],
+            offsets[i], dtype, (total_tokens,)
+        ))
+
+    with Pool(processes=args.num_workers, initializer=init_worker,
+              initargs=(vocab_path, merges_path, special_tokens)) as pool:
+        list(tqdm(pool.imap(write_tokens, write_tasks), total=len(write_tasks), desc="Writing tokens"))
+
+    end_time = time.time()
+    print(f"\n[Done] Total tokens: {total_tokens}")
+    print(f"[Done] Saved to: {abs_output_path}")
+    print(f"[Done] Total time: {end_time - start_time:.2f} seconds")
