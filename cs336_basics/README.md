@@ -22,8 +22,7 @@ ssh -p 2117 stu2400010766@119.167.167.34
 ```bash
 cd ./data/cs336/llm-from-scratch-assignment1-basics/
 scp -P 2117 ./cs336-spring2025-assignment-1-submission.zip \
-  stu2400010766@119.167.167.34:/home/stu2400010766/ \
-  cs336-spring2025-assignment-1-submission.zip
+  stu2400010766@119.167.167.34:/home/stu2400010766/
 ```
 服务器解压
 
@@ -56,11 +55,20 @@ uv run python -m scripts.train \
 exit # 结束后退出
 ```
 
-9. 走的时候记得 `exit` 退出
+9. 模型使用
+
+```bash
+uv run python -m scripts.inference \
+    --ckpt ./wandb_test_ckpts/checkpoint_final_6000.pt \
+    --prompt "Who are you?" \
+    --temp 0.7
+```
+
+10. 走的时候记得 `exit` 退出
 
 
 
-10. 规范:
+11. 规范:
 - 创建新的文件记得打印**绝对路径**
 - 用 `pathlib` 而非 `os` 方便维护
 - 用 `argparse` 而不要改代码

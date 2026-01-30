@@ -48,7 +48,7 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=str, required=True)
     parser.add_argument("--output", type=str, default="./data/owt_train.dat")
     parser.add_argument("--tokenizer_dir", type=str, default="./data")
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=64)
     args = parser.parse_args()
 
     start_time = time.time()
