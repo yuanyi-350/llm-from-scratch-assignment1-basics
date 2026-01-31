@@ -67,6 +67,21 @@ class SwiGLU(nn.Module):
 
 
 
+class SiLU(nn.Module):
+    """
+    Standard FFN with SiLU activation: y = W2(SiLU(W1(x)))
+    Used for the SwiGLU vs SiLU ablation.
+    """
+    def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
+        super().__init__()
+        self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.w1(x)
+        return self.w2(x * torch.sigmoid(x))
+
+
+
 class RotaryPositionalEmbedding(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
         """
@@ -188,74 +203,108 @@ class CausalMultiHeadSelfAttention(nn.Module):
         return self.w_o(attn_out)
 
 
-
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, device=None, dtype=None):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int,
+                 norm_type: str = 'pre', activation_type: str = 'swiglu',
+                 device=None, dtype=None):
         super().__init__()
-        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm_type = norm_type
+
+        if norm_type != 'none':
+            self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+            self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
+        else:
+            self.norm1 = None
+            self.norm2 = None
+
         self.mha = CausalMultiHeadSelfAttention(d_model, num_heads, device=device, dtype=dtype)
 
-        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
-        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        # 根据 activation_type 选择 FFN
+        if activation_type == 'swiglu':
+            self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        elif activation_type == 'silu':
+            self.ffn = SiLU(d_model, d_ff, device=device, dtype=dtype)
+        else:
+            raise ValueError(f"Unknown activation type: {activation_type}")
 
     def forward(self, x: torch.Tensor, rope_module=None, token_positions=None):
-        h = x
-        x_norm = self.norm1(x)
-        attn_out = self.mha(x_norm, rope_module=rope_module, token_positions=token_positions)
-        h = h + attn_out
-        ffn_out = self.ffn(self.norm2(h))
-        return h + ffn_out
+        # 1. Ablation 1 & 2: Norm Logic (Pre vs Post vs None)
+        if self.norm_type == 'pre':
+            # Pre-norm (Standard): x + Sublayer(Norm(x))
+            x_norm = self.norm1(x)
+            attn_out = self.mha(x_norm, rope_module=rope_module, token_positions=token_positions)
+            x = x + attn_out
+
+            x_norm2 = self.norm2(x)
+            ffn_out = self.ffn(x_norm2)
+            x = x + ffn_out
+
+        elif self.norm_type == 'post':
+            # Post-norm: Norm(x + Sublayer(x))
+            attn_out = self.mha(x, rope_module=rope_module, token_positions=token_positions)
+            x = self.norm1(x + attn_out)
+
+            ffn_out = self.ffn(x)
+            x = self.norm2(x + ffn_out)
+
+        elif self.norm_type == 'none':
+            # No Norm: x + Sublayer(x)
+            attn_out = self.mha(x, rope_module=rope_module, token_positions=token_positions)
+            x = x + attn_out
+
+            ffn_out = self.ffn(x)
+            x = x + ffn_out
+
+        return x
 
 
 class TransformerLM(nn.Module):
-    def __init__(self, vocab_size: int, context_length: int, d_model: int, num_layers: int, num_heads: int, d_ff: int,
-            attn_pdrop: float = 0.0, resid_pdrop: float = 0.0, device=None, dtype=None):
-        """
-        Transformer Language Model.
-
-        Args:
-            vocab_size: Size of the vocabulary.
-            context_length: Maximum context length (for RoPE or Positional Embeddings).
-            d_model: Dimensionality of the model.
-            num_layers: Number of Transformer blocks.
-            num_heads: Number of attention heads.
-            d_ff: Dimensionality of the feed-forward inner layer.
-        """
+    def __init__(self, vocab_size: int, context_length: int, d_model: int,
+                 num_layers: int, num_heads: int, d_ff: int,
+                 norm_type: str = 'pre', activation_type: str = 'swiglu', use_rope: bool = True,
+                 device=None, dtype=None):
         super().__init__()
         self.context_length = context_length
         self.d_model = d_model
+        self.use_rope = use_rope
         self.token_embeddings = Embedding(vocab_size, d_model, device=device, dtype=dtype)
 
         head_dim = d_model // num_heads
-        self.rope = RotaryPositionalEmbedding(theta=10000.0, d_k=head_dim, max_seq_len=context_length, device=device)
+
+        if use_rope:
+            self.rope = RotaryPositionalEmbedding(theta=10000.0, d_k=head_dim, max_seq_len=context_length,
+                                                  device=device)
+        else:
+            self.rope = None
 
         self.layers = nn.ModuleList([
-            TransformerBlock(d_model, num_heads, d_ff, device=device, dtype=dtype)
+            TransformerBlock(d_model, num_heads, d_ff,
+                             norm_type=norm_type,
+                             activation_type=activation_type,
+                             device=device, dtype=dtype)
             for _ in range(num_layers)
         ])
 
-        self.norm_final = RMSNorm(d_model, device=device, dtype=dtype)
+        if norm_type != 'none':
+            self.norm_final = RMSNorm(d_model, device=device, dtype=dtype)
+        else:
+            self.norm_final = nn.Identity()
 
         self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            input_ids: (batch_size, seq_len)
-        Returns:
-            logits: (batch_size, seq_len, vocab_size)
-        """
         batch_size, seq_len = input_ids.shape
-
-        x = self.token_embeddings(input_ids)  # (batch, seq, d_model)
+        x = self.token_embeddings(input_ids)
 
         token_positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, seq_len)
 
+        rope_to_pass = self.rope if self.use_rope else None
+
         for block in self.layers:
-            x = block(x, rope_module=self.rope, token_positions=token_positions)
+            x = block(x, rope_module=rope_to_pass, token_positions=token_positions)
 
         x = self.norm_final(x)
-        return self.lm_head(x)  # (batch, seq, vocab_size)
+        return self.lm_head(x)
 
 
 

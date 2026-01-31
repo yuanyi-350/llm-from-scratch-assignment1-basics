@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument('--val_interval', type=int, default=100, help='Validation interval')
     parser.add_argument('--val_batches', type=int, default=10, help='Number of validation batches')
     parser.add_argument('--save_intervals', type=int, default=1000, help='Checkpoint save interval')
-    parser.add_argument('--log_intervals', type=int, default=1, help='Logging interval')
+    parser.add_argument('--log_intervals', type=int, default=100, help='Logging interval')
     parser.add_argument('--save_ckp_path', type=str, default='./checkpoints', help='Checkpoint save directory')
     parser.add_argument('--resume_ckp', type=str, default=None, help='Path to checkpoint to resume from')
 
@@ -56,6 +56,14 @@ def parse_args():
     parser.add_argument('--wandb_project', type=str, default='cs336-transformer', help='Wandb project name')
     parser.add_argument('--wandb_run_name', type=str, default=None, help='Wandb run name')
     parser.add_argument('--no_wandb', action='store_true', help='Disable wandb logging')
+
+    # Ablation Arguments
+    parser.add_argument('--norm_type', type=str, default='pre', choices=['pre', 'post', 'none'],
+                        help='Type of layer normalization: pre, post, or none')
+    parser.add_argument('--disable_rope', action='store_true',
+                        help='Disable Rotary Positional Embeddings (NoPE)')
+    parser.add_argument('--activation_type', type=str, default='swiglu', choices=['swiglu', 'silu'],
+                        help='Activation function type: swiglu or silu')
 
     return parser.parse_args()
 
@@ -99,6 +107,11 @@ def main():
     # Create checkpoint directory
     os.makedirs(args.save_ckp_path, exist_ok=True)
 
+    actual_d_ff = args.d_ff
+    if args.activation_type == 'silu' and args.d_ff == 1344:  # 假设用户没改 d_ff
+        actual_d_ff = 4 * args.d_model
+        print(f"Switching d_ff to {actual_d_ff} for SiLU to match parameter count.")
+
     # Initialize model
     model = TransformerLM(
         vocab_size=args.vocab_size,
@@ -106,7 +119,10 @@ def main():
         num_layers=args.num_layers,
         d_model=args.d_model,
         num_heads=args.num_heads,
-        d_ff=args.d_ff,
+        d_ff=actual_d_ff,
+        norm_type=args.norm_type,
+        activation_type=args.activation_type,
+        use_rope=not args.disable_rope,
         device=device
     )
 
