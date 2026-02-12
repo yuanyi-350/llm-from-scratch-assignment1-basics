@@ -84,7 +84,29 @@ uv run python -m scripts.train \
     --batch_size 16 \
     --train_steps 15000 \
     --val_interval 250 \
-    --save_intervals 500
+    --save_intervals 500 \
+    --log_intervals 100
+```
+
+```bash
+uv run python -m scripts.train \
+    --resume_ckp ./wandb_test_ckpts_owt/checkpoint_9000.pt \
+    --data_dir ./data_owt \
+    --vocab_size 32000 \
+    --context_len 512 \
+    --d_model 768 \
+    --num_layers 12 \
+    --num_heads 12 \
+    --d_ff 3072 \
+    --batch_size 24 \
+    --train_steps 30000 \
+    --val_interval 100 \
+    --save_intervals 1000 \
+    --log_intervals 100
+    --save_ckp_path ./wandb_test_ckpts_owt \
+    --device cuda \
+    --wandb_project "cs336-playground" \
+    --wandb_run_name "owt-resume-b24"
 ```
 
 
@@ -103,6 +125,8 @@ CUDA_VISIBLE_DEVICES=3 uv python -m scripts.train \
 ```
 
 
+
+
 10. 模型使用
 
 ```bash
@@ -111,6 +135,18 @@ uv run python -m scripts.inference \
     --prompt "Who are you?" \
     --temp 0.7
 ```
+
+```bash
+uv run python -m scripts.inference \
+    --merges_file ./data/owt_train_merges.pkl \
+    --vocab_file ./data/owt_train_vocab.pkl \
+    --ckpt ./wandb_test_ckpts_owt/checkpoint_9000.pt \
+    --prompt "Who are you?" \
+    --temp 0.7
+```
+
+
+
 
 10. 走的时候记得 `exit` 退出, 然后一定要看一下自己有没有任务在跑, 避免显卡空转.
 ```bash

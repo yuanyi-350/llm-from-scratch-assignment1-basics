@@ -265,7 +265,8 @@ def main():
                     val_targets_flat = val_target_ids.view(-1)
 
                     val_loss = cross_entropy(val_logits_flat, val_targets_flat)
-                    val_losses.append(val_loss.item())
+                    val_losses.append(val_loss.item()) # 只保存数值
+                    # 坑点: val_losses.append(val_loss) 保存了整个计算图！
 
             avg_val_loss = np.mean(val_losses)
             val_perplexity = np.exp(avg_val_loss)
