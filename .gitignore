@@ -9,6 +9,8 @@ __pycache__/
 
 # 忽略数据集文本
 *.txt
+*.aux
+*.pdf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

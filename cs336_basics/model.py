@@ -138,10 +138,12 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     x: torch.Tensor Input of the softmax
     dim: int The dimension of x that you want to impelement softmax to.
     """
-    x = x - torch.max(x, dim=dim, keepdim=True).values
+    orig_dtype = x.dtype
+    x = x.float()
+    x = x - x.max(dim=dim, keepdim=True).values
     x = torch.exp(x)
-    return x / torch.sum(x, dim=dim, keepdim=True)
-
+    x = x / x.sum(dim=dim, keepdim=True)
+    return x.to(orig_dtype)
 
 
 def scaled_dot_product_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
@@ -161,7 +163,8 @@ def scaled_dot_product_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tens
     d_k = q.shape[-1]
     scores = einsum(q, k, "... queries d_k, ... keys d_k -> ... queries keys") / math.sqrt(d_k)
     if mask is not None:
-        scores = scores.masked_fill(mask == False, float('-inf'))
+        neg = -1e4 if scores.dtype in (torch.float16, torch.bfloat16) else -1e9
+        scores = scores.masked_fill(~mask, neg)
     scores = softmax(scores, dim=-1)
     return einsum(scores, v, '... s_q s_k, ... s_k d -> ... s_q d')
 
@@ -320,11 +323,11 @@ def cross_entropy(logits: torch.Tensor, true_labels: torch.Tensor) -> torch.Tens
     Returns:
         torch.Tensor: The average loss across the batch.
     """
+    logits = logits.float()
     c = logits.max(dim=-1, keepdim=True).values
     logits_stable = logits - c
     exp_sum = torch.sum(torch.exp(logits_stable), dim=-1, keepdim=True)
     log_sum_exp = c + torch.log(exp_sum)
-
     true_logits = logits.gather(dim=-1, index=true_labels.unsqueeze(-1))
     loss = log_sum_exp - true_logits
     return loss.mean()

@@ -33,6 +33,16 @@ uv add wandb
 uv run wandb login
 ```
 
+7. tmux
+```bash
+$ tmux new -s yuanyi_train # 创建 yuanyi_train 会话, 进入一个新的窗口, 在里面输入命令 uv run ...
+# 按住键盘上的 Ctrl + B (告诉 tmux , 下一个要按的键是给 tmux 的命令，不是给里面运行的程序的)
+# 松开所有键, 按一下 D 键 (代表 Detach), 这样退出 Tmux 界面回到普通 terminal
+[detached (from session yuanyi_train)] #说明任务已在后台安全运行, 可以去睡觉了
+$ tmux ls # 睡醒后查看后台所有任务
+yuanyi_train: 1 windows (created Fri Jan 30 01:01:15 2026)
+$ tmux attach -t yuanyi_train # 回到 tmux 界面
+```
 
 8. `slurm`提交任务
 ```bash

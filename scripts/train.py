@@ -12,6 +12,7 @@ Example usage:
 import argparse
 from tqdm import tqdm
 import wandb
+from contextlib import nullcontext
 from cs336_basics.model import *
 
 
@@ -50,6 +51,8 @@ def parse_args():
 
     # Data arguments
     parser.add_argument('--data_dir', type=str, default=None, help='Data directory path')
+    parser.add_argument('--precision', type=str, default='fp32', choices=['bf16', 'fp32'],
+                        help='Mixed precision mode')
     parser.add_argument('--device', type=str, default='auto', help='Device: auto, cpu, cuda, mps')
 
     # Wandb arguments
@@ -95,6 +98,11 @@ def main():
     device = get_device(args.device)
     print(f"Using device: {device}")
 
+    if device == "cuda":
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     # Initialize wandb
     if not args.no_wandb:
         wandb.init(
@@ -125,6 +133,9 @@ def main():
         use_rope=not args.disable_rope,
         device=device
     )
+
+    use_amp = (device == "cuda" and args.precision == "bf16")
+    amp_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model initialized with {total_params} parameters")
@@ -197,24 +208,13 @@ def main():
         input_ids = input_ids.long()
         target_ids = target_ids.long()
 
-        # Forward pass
-        optimizer.zero_grad()
-        logits = model(input_ids)
+        optimizer.zero_grad(set_to_none=True)
+        with amp_ctx:
+            logits = model(input_ids)
+            loss = cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1))
 
-        # Compute loss
-        # Reshape for cross entropy: (batch_size * seq_len, vocab_size) and (batch_size * seq_len,)
-        logits_flat = logits.view(-1, logits.size(-1))
-        targets_flat = target_ids.view(-1)
-
-        loss = cross_entropy(logits_flat, targets_flat)
-
-        # Backward pass
         loss.backward()
-
-        # Gradient clipping
         gradient_clipping(model.parameters(), args.clip_grad_norm)
-
-        # Optimizer step
         optimizer.step()
 
         # Track loss
@@ -256,15 +256,11 @@ def main():
                         args.context_len,
                         device=device
                     )
-
-                    val_input_ids = val_input_ids.long()
-                    val_target_ids = val_target_ids.long()
-
-                    val_logits = model(val_input_ids)
-                    val_logits_flat = val_logits.view(-1, val_logits.size(-1))
-                    val_targets_flat = val_target_ids.view(-1)
-
-                    val_loss = cross_entropy(val_logits_flat, val_targets_flat)
+                    with amp_ctx:
+                        val_logits = model(val_input_ids)
+                        val_logits_flat = val_logits.view(-1, val_logits.size(-1))
+                        val_targets_flat = val_target_ids.view(-1)
+                        val_loss = cross_entropy(val_logits_flat, val_targets_flat)
                     val_losses.append(val_loss.item()) # 只保存数值
                     # 坑点: val_losses.append(val_loss) 保存了整个计算图！
 
