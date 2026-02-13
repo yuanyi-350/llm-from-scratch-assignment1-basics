@@ -1,0 +1,845 @@
+\documentclass{ctexart}
+
+\usepackage[top=1.5cm, bottom=1.5cm, left=2.0cm, right=2.0cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+
+\pagestyle{plain} % 取消页眉
+
+
+
+\ctexset{tablename = {Table}}
+
+
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}} 
+
+\newcommand{\sorry}{{\color{red}{sorry}}} 
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    numbers=left,
+    numberstyle=\tiny,
+    frame=single,
+    breaklines=true,
+    captionpos=b,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green},
+    stringstyle=\color{red},
+    showstringspaces=false
+}
+
+
+\newcounter{cnt}
+\theoremstyle{definition} \newtheorem{problem}[cnt]{Problem}
+\AtBeginEnvironment{problem}{\setlength{\parindent}{0pt}}
+
+\newtheorem*{sol}{Solution}
+
+\newlist{questions}{enumerate}{1}
+\setlist[questions]{label=(\alph*), leftmargin=2.2em, itemsep=0.6em}
+
+\newlist{subquestions}{enumerate}{1}
+\setlist[subquestions]{label=(\alph*), leftmargin=2.2em, itemsep=0.4em}
+
+\newenvironment{solution}{\begin{sol}\end{sol}\setlength{\parindent}{0pt}\begin{questions}}{
+    \end{questions}\vspace{2.5em}}
+
+\newenvironment{solution*}{\begin{sol}\end{sol}}{\vspace{2.5em}}
+
+\title{CS336 Assignment1}
+\author{袁奕}
+
+\begin{document}
+
+\maketitle
+
+
+
+\section{Assignment Overview}
+
+\url{https://github.com/yuanyi-350/llm-from-scratch-assignment1-basics}
+
+\section{Byte-Pair Encoding (BPE) Tokenizer}
+
+\begin{problem}[unicode1]
+Understanding Unicode (1 point)
+    \begin{questions}
+    \item What Unicode character does \code{chr(0)} return?
+
+    \item How does this character's string representation \code{__repr__()} differ from its printed representation?
+
+    \item What happens when this character occurs in text? It may be helpful to play around with the following in your Python interpreter and see if it matches your expectations:
+\begin{lstlisting}[language=Python]
+>>> chr(0)
+>>> print(chr(0))
+>>> "this is a test" + chr(0) + "string"
+>>> print("this is a test" + chr(0) + "string")
+    \end{lstlisting}
+    \end{questions}
+\end{problem}
+
+
+
+\begin{solution}
+  \item \code{chr(0)} returns the Null character. It is a non-printable control character.
+  \item The \code{__repr__()} (string representation) returns the explicit escape sequence string \code{'\x00'}. This allows the programmer to "see" that the character is there.
+  \item The code will print "this is a test string" (visually, the chr(0) is invisible, so "test" and "string" might appear concatenated).
+\end{solution}
+
+
+
+
+
+
+
+
+\begin{problem}[unicode2]
+Unicode Encodings (3 points)
+
+\begin{questions}
+    \item What are some reasons to prefer training our tokenizer on UTF-8 encoded bytes, rather than UTF-16 or UTF-32? It may be helpful to compare the output of these encodings for various input strings.
+
+    \item Consider the following (incorrect) function, which is intended to decode a UTF-8 byte string into a Unicode string. Why is this function incorrect? Provide an example of an input byte string that yields incorrect results.
+    \begin{lstlisting}[language=Python]
+def decode_utf8_bytes_to_str_wrong(bytestring: bytes):
+    return "".join([bytes([b]).decode("utf-8") for b in bytestring])
+>>> decode_utf8_bytes_to_str_wrong("hello".encode("utf-8"))
+'hello'
+    \end{lstlisting}
+
+    \item Give a two byte sequence that does not decode to any Unicode character(s).
+\end{questions}
+\end{problem}
+\begin{solution}
+    \item UTF-8 is preferred because it is space-efficient for ASCII-heavy text (using 1 byte per character vs. 2 or 4 in UTF-16/32) and avoids the frequent null bytes found in fixed-width encodings, which would artificially inflate the token sequence length without adding semantic meaning.
+    \item \textbf{Example input:} \texttt{b'\textbackslash xc3\textbackslash xa9'} (which represents the character 'é').
+    
+    \textbf{Explanation:} The function is incorrect because UTF-8 is a variable-width encoding where characters can span multiple bytes; iterating byte-by-byte attempts to decode incomplete byte sequences (like a leading byte in isolation) independently, resulting in a decoding error.
+
+    \item \textbf{Example:} \texttt{b'\textbackslash x80\textbackslash x80'} \\
+    \textbf{Explanation:} This sequence is invalid because the byte \texttt{0x80} is a designated continuation byte in UTF-8 logic and cannot appear at the start of a valid character sequence.
+\end{solution}
+
+
+
+
+
+\begin{problem}[\code{train_bpe_tinystories}]
+BPE Training on TinyStories (2 points)
+
+\begin{questions}
+  \item Train a byte-level BPE tokenizer on the TinyStories dataset, using a maximum vocabulary size
+  of 10,000. Make sure to add the TinyStories \texttt{<|endoftext|>} special token to the vocabulary.
+  Serialize the resulting vocabulary and merges to disk for further inspection. How many hours
+  and memory did training take? What is the longest token in the vocabulary? Does it make sense?
+
+  \noindent\textbf{Resource requirements:} $\le$ 30 minutes (no GPUs), $\le$ 30GB RAM
+
+  \noindent\textbf{Hint} You should be able to get under 2 minutes for BPE training using multiprocessing during
+  pretokenization and the following two facts:
+  \begin{subquestions}
+    \item The \texttt{<|endoftext|>} token delimits documents in the data files.
+    \item The \texttt{<|endoftext|>} token is handled as a special case before the BPE merges are applied.
+  \end{subquestions}
+
+  \item Profile your code. What part of the tokenizer training process takes the most time?
+
+\end{questions}
+\end{problem}
+
+\begin{solution}
+    \item Training Time: Training completed in approximately 24 seconds.
+
+    Memory Usage: The peak memory usage was approximately 842 MB (0.82 GB).
+
+    The longest token in the vocabulary is " accomplishment", whose ID is 7160.
+
+    \item My code is available at \url{https://github.com/yuanyi-350/llm-from-scratch-assignment1-basics/blob/main/cs336_basics/tokenizer.py}. In the first step, the program performs pre-tokenization using the GPT-4 regex pattern and counts token frequencies in parallel to construct a \code{Counter}, which takes 17.67s. Subsequently, it completes the merging algorithm using a heap, taking only about 10s.
+    \begin{lstlisting}
+Pre-tokenization complete in 17.67s
+Statistics: 59933 unique pre-tokens, 536592168 total tokens.
+    \end{lstlisting}  
+\end{solution}
+
+
+
+
+\vspace{1em}
+\begin{problem}[\code{train_bpe_expts_owt}]
+BPE Training on OpenWebText (2 points)
+
+\begin{questions}
+  \item Train a byte-level BPE tokenizer on the OpenWebText dataset, using a maximum vocabulary size of 32,000 . Serialize the resulting vocabulary and merges to disk for further inspection. What is the longest token in the vocabulary? Does it make sense?
+  Resource requirements: $\leq 12$ hours (no GPUs), $\leq 100 \mathrm{~GB}$ RAM
+  
+  \item Compare and contrast the tokenizer that you get training on TinyStories versus OpenWebText.
+\end{questions}
+\end{problem}
+\begin{solution}
+    \item
+    \begin{lstlisting}[caption={Top 20 longest tokens}]
+Rank  | ID     | Len   |Content
+------------------------------------------------------------
+1     | 25822  | 64    | 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ'
+2     | 25836  | 64    | '-' * 64
+3     | 31274  | 48    | '————————————————'
+4     | 10900  | 32    | '--------------------------------'
+5     | 15947  | 32    | '________________________________'
+6     | 16885  | 32    | 'ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ'
+7     | 25146  | 32    | '================================'
+8     | 28585  | 32    | '................................'
+9     | 31162  | 32    | '********************************'
+10    | 15279  | 24    | '————————'
+11    | 23327  | 19    | ' disproportionately'
+12    | 24268  | 19    | ' telecommunications'
+13    | 28274  | 18    | ' environmentalists'
+14    | 14284  | 17    | ' responsibilities'
+15    | 16284  | 17    | ' unconstitutional'
+16    | 25698  | 17    | ' cryptocurrencies'
+17    | 26073  | 17    | ' disproportionate'
+18    | 27038  | 17    | ' misunderstanding'
+19    | 28492  | 17    | ' counterterrorism'
+20    | 30211  | 17    | ' characterization'
+    \end{lstlisting}
+
+    \item 
+    
+    \begin{lstlisting}
+TinyStories Vocab Size : 10000
+Avg Token Length       : 5.79 bytes
+
+OpenWebText Vocab Size : 32000
+Avg Token Length       : 6.34 bytes
+
+Common Tokens          : 7319
+    \end{lstlisting}
+
+
+\end{solution}
+
+
+
+
+
+
+\begin{problem}[\code{tokenizer_experiments}]
+    Experiments with tokenizers (4 points)
+    \begin{questions}
+    \item Sample 10 documents from TinyStories and OpenWebText. Using your previously-trained TinyStories and OpenWebText tokenizers ( 10 K and 32 K vocabulary size, respectively), encode these sampled documents into integer IDs. What is each tokenizer's compression ratio (bytes/token)?
+    \item What happens if you tokenize your OpenWebText sample with the TinyStories tokenizer? Compare the compression ratio and/or qualitatively describe what happens.
+    \item Estimate the throughput of your tokenizer (e.g., in bytes/second). How long would it take to tokenize the Pile dataset ( 825 GB of text)?
+    \item Using your TinyStories and OpenWebText tokenizers, encode the respective training and development datasets into a sequence of integer token IDs. We'll use this later to train our language model. We recommend serializing the token IDs as a NumPy array of datatype uint16. Why is uint16 an appropriate choice?
+    \end{questions}
+\end{problem}
+\begin{solution}
+    \item For the TinyStories tokenizer (10K vocab), the compression ratio is approximately 3.82 bytes/token, whereas for the OpenWebText tokenizer (32K vocab), the compression ratio is higher at approximately 4.71 bytes/token. This difference indicates that the larger vocabulary of the OWT tokenizer allows for more efficient encoding by merging longer character sequences into single tokens.
+    
+    \begin{lstlisting}[language=Bash]
+stu2400010766@lfs-dev:~/cs336$ ls -lh data
+-rw-rw-r-- 1 stu2400010766 stu2400010766 5.1G Jan 30 06:00 owt_train.dat
+-rw-rw-r-- 1 stu2400010766 stu2400010766 382K Jan 29 23:16 owt_train_merges.pkl
+-rw-rw-r-- 1 stu2400010766 stu2400010766 386K Jan 29 23:16 owt_train_vocab.pkl
+-rw-rw-r-- 1 stu2400010766 stu2400010766 5.1G Jan 30 10:27 owt_valid.dat
+-rw-rw-r-- 1 stu2400010766 stu2400010766 108K Jan 29 00:19 tinystories_merges.pkl
+-rw-rw-r-- 1 stu2400010766 stu2400010766 1.1G Jan 29 00:46 tinystories_train.dat
+-rw-rw-r-- 1 stu2400010766 stu2400010766 112K Jan 30 15:57 tinystoriesv2-gpt4-train_merges.pkl
+-rw-rw-r-- 1 stu2400010766 stu2400010766 115K Jan 30 15:57 tinystoriesv2-gpt4-train_vocab.pkl
+-rw-rw-r-- 1 stu2400010766 stu2400010766  11M Jan 29 00:47 tinystories_valid.dat
+-rw-rw-r-- 1 stu2400010766 stu2400010766 115K Jan 29 00:19 tinystories_vocab.pkl         
+    \end{lstlisting}
+
+    \item \sorry
+    \item TinyStories (2.1 GB) took 24s to process, yielding a throughput of ~90 MB/s, while OWT (12 GB) took 20 min, yielding ~10 MB/s (see \ref{lst:owt_bpe_time_cost}). Using the OWT throughput (10 MB/s) as a baseline, tokenizing the 825GB Pile dataset would take roughly 23 hours.
+    
+    \item uint16 can store integers from 0 to 65,535 ($2^16−1$). Since our vocabulary sizes are 10,000 and 32,000, all token IDs fit comfortably within this range, and using uint16 uses half the memory of the standard int32, optimizing storage for large datasets.
+\end{solution}
+
+
+
+\section{Transformer Language Model Architecture}
+
+\vspace{1em}
+\begin{problem}[\code{transformer_accounting}]
+Transformer LM resource accounting (5 points)
+
+\begin{questions}
+  \item Consider GPT-2 XL, which has the following configuration:
+  \begin{verbatim}
+vocab_size     : 50,257
+context_length : 1,024
+num_layers     : 48
+d_model        : 1,600
+num_heads      : 25
+d_ff           : 6,400
+  \end{verbatim}
+
+  Suppose we constructed our model using this configuration. How many trainable parameters
+  would our model have? Assuming each parameter is represented using single-precision
+  floating point, how much memory is required to just load this model?
+
+  \item Identify the matrix multiplies required to complete a forward pass of our GPT-2 XL-shaped
+  model. How many FLOPs do these matrix multiplies require in total? Assume that our input
+  sequence has \texttt{context\_length} tokens.
+
+  \item Based on your analysis above, which parts of the model require the most FLOPs?
+
+  \item Repeat your analysis with GPT-2 small (\code{12 layers, 768 d_model, 12 heads}),
+  GPT-2 medium (\code{24 layers, 1024 d_model, 16 heads}), and GPT-2 large
+  (\code{36 layers, 1280 d_model, 20 heads}). As the model size increases, which parts
+  of the Transformer LM take up proportionally more or less of the total FLOPs?
+
+  \item Take GPT-2 XL and increase the context length to 16,384. How does the total FLOPs for one forward pass change? How do the relative contribution of FLOPs of the model components change?
+
+\end{questions}
+\end{problem}
+
+\begin{solution}
+    \item Embeddings $= V \times d_{\text {model }}+n_{c t x} \times d_{\text {model }}=(50,257+1,024) \times 1,600 \approx 82 \times 10^6$.
+    
+    Per Layer:
+    \begin{itemize}
+        \item Attention: 4 projections $\left(W_q, W_k, W_v, W_o\right)$ of size $d_{\text {model }}^2$. Total: $4 d_{\text {model }}^2$.
+        \item MLP: 2 projections ( $d_{\text {model }} \times d_{f f}$ and $\left.d_{f f} \times d_{\text {model }}\right)$. With $d_{f f}=4 d_{\text {model }}$, this is $8 d_{\text {model }}^2$.
+        \item Layer Norms: $2 \times 2 \times d_{\text {model }}$ (negligible).
+    \end{itemize}
+    Total per layer: $\approx 12 d_{\text {model }}^2$.
+    
+    Total Count: $12 \times 48 \times 1,600^2+82 \times 10^6 \approx 1,474,560,000+ 82,049,600 \approx 1.56$ B.
+    
+    Memory: $1.557 \times 10^9$ params $\times 4$ bytes/param $\approx 6.23 \mathrm{~GB}$.
+
+
+    \item List of Matrix Multiplies (Per Layer):
+    \begin{itemize}
+        \item Q, K, V Projections: Input $X\left(T \times d_{\text {model }}\right)$ multiplied by $W_q, W_k, W_v\left(d_{\text {model }} \times d_{\text {model }}\right)$.
+        \item Attention Scores: Query ( $T \times d_{\text {model }}$ ) multiplied by Key, $\left(d_{\text {model }} \times T\right)$.
+        \item Attention Weighted Sum: Scores ( $T \times T$ ) multiplied by Values ( $T \times d_{\text {model }}$ ).
+        \item Output Projection: Context ( $T \times d_{\text {model }}$ ) multiplied by $W_o\left(d_{\text {model }} \times d_{\text {model }}\right)$.
+        \item MLP Expansion: Input $\left(T \times d_{\text {model }}\right)$ multiplied by $W_{f c}\left(d_{\text {model }} \times d_{f f}\right)$.
+        \item MLP Projection: Activation ( $T \times d_{f f}$ ) multiplied by $W_{\text {proj }}\left(d_{f f} \times d_{\text {model }}\right)$.
+        \item Logits (Final Layer): Output ( $T \times d_{\text {model }}$ ) multiplied by Unembedding Matrix ( $d_{\text {model }} \times$ V).
+    \end{itemize}
+    FLOPs Calculation (Per Layer):
+    \begin{itemize}
+        \item Dense Layers (Q,K,V,O, MLP): $24 \cdot T \cdot d_{\text {model }}^2$.
+        \item Attention (Score + Sum): $4 \cdot T^2 \cdot d_{\text {model }}$.
+        \item Logits: $2 \cdot T \cdot d_{\text {model }} \cdot V$.
+    \end{itemize}
+
+    For GPT-2 XL \code{L=48, d=1600, T=1024}:
+    \begin{align}
+    \text { Total } &\approx L\left(24 T d^2+4 T^2 d\right)+2 T d V \\
+    &\approx 48\left(24 \cdot 1024 \cdot 1600^2+4 \cdot 1024^2 \cdot 1600\right)+2 \cdot 1024 \cdot 1600 \cdot 50257 \\
+    &\approx 48(62.9 \text { GFLOPs }+6.7 \text { GFLOPs })+0.16 \text { GFLOPs } \approx 3.3 \text { TeraFLOPs }
+    \end{align}
+
+    \item The dense matrix multiplications in the Linear layers (specifically the MLP expansion/projection and the Q,K,V,O projections) require the most FLOPs, accounting for over 90\% of the computation in this configuration.
+
+    \item We analyze the ratio of Attention FLOPs ( $4 T^2 d$ ) to Dense FLOPs ( $24 T d^2$ ). Ratio $\approx \dfrac{4 T^2 d}{24 T d^2}=\dfrac{T}{6 d}$.
+    
+    \begin{itemize}
+        \item GPT-2 Small: ~82\% Dense weights, ~18\% Attention.
+        \item GPT-2 Medium: ~86\% Dense weights, ~14\% Attention.
+        \item GPT-2 Large: ~88\% Dense weights, ~12\% Attention.
+    \end{itemize}
+
+    \item \sorry
+
+\end{solution}
+
+
+
+
+
+
+
+
+
+\section{Training a Transformer LM}
+
+
+
+
+
+
+\vspace{1em}
+\begin{problem}[\code{learning_rate_tuning}]
+Tuning the learning rate (1 point)
+
+As we will see, one of the hyperparameters that affects training the most is the learning rate. Let's see that in practice in our toy example. Run the SGD example above with three other values for the learning rate: $1 \mathrm{e} 1,1 \mathrm{e} 2$, and $1 \mathrm{e} 3$ , for just 10 training iterations. What happens with the loss for each of these learning rates? Does it decay faster, slower, or does it diverge (i.e., increase over the course of training)?
+\end{problem}
+\begin{solution*}
+    \sorry
+\end{solution*}
+
+
+
+\begin{problem}[\code{adamwAccounting}]
+    Resource accounting for training with AdamW (2 points)
+
+    Let us compute how much memory and compute running AdamW requires. Assume we are using float32 for every tensor.
+    \begin{questions}
+    \item How much peak memory does running AdamW require?
+    Decompose your answer based on the memory usage of the parameters,
+    activations, gradients, and optimizer state.
+    Express your answer in terms of the batch size and the model hyperparameters
+    (\texttt{vocab\_size}, \texttt{context\_length}, \texttt{num\_layers},
+    \texttt{d\_model}, \texttt{num\_heads}).
+    Assume $d_{\text{ff}} = 4 \times d_{\text{model}}$.
+
+    For simplicity, when calculating memory usage of activations,
+    consider only the following components:
+    \begin{itemize}
+      \item Transformer block
+      \begin{itemize}
+        \item RMSNorm(s)
+        \item Multi-head self-attention sublayer:
+        $QKV$ projections, $Q^\top K$ matrix multiply, softmax,
+        weighted sum of values, output projection.
+        \item Position-wise feed-forward:
+        $W_1$ matrix multiply, SiLU, $W_2$ matrix multiply
+      \end{itemize}
+      \item final RMSNorm
+      \item output embedding
+      \item cross-entropy on logits
+    \end{itemize}
+
+    \item Instantiate your answer for a GPT-2 XL-shaped model to get an expression
+    that only depends on the \texttt{batch\_size}.
+    What is the maximum batch size you can use and still fit within 80GB memory?
+
+    \item How many FLOPs does running one step of AdamW take?
+
+    \item Model FLOPs utilization (MFU) is defined as the ratio of observed throughput (tokens per second) relative to the hardware’s theoretical peak FLOP throughput. An
+    NVIDIA A100 GPU has a theoretical peak of 19.5 teraFLOP/s for float32 operations. Assuming you are able to get 50\% MFU, how long would it take to train a GPT-2 XL for 400K steps and a batch size of 1024 on a single A100?
+    \end{questions}
+\end{problem}
+\begin{solution}
+    \item We decompose the memory usage into static memory (Parameters, Gradients, Optimizer States) and dynamic memory (Activations). We assume 4 bytes (float32) per value.
+    
+    1. Static Memory (Independent of batch size):
+    \begin{itemize}
+        \item Parameters ($P$): $\approx 12 L d_{model}^2 + V d_{model}$
+        \item Gradients ($G$): $= P$
+        \item Optimizer States ($OS$): AdamW stores first ($m$) and second ($v$) moments, so $2 \times P$.
+    \end{itemize}
+    Total Static Memory $= 4 \text{ bytes} \times (P + G + OS) = 16 P \text{ bytes}$.
+    
+    2. Activations (Dependent on batch size $B$):
+    \begin{itemize}
+        \item Attention: RMSNorm input ($B T d$) + QKV outputs ($3 B T d$) + Scores ($B n_h T^2$) + Softmax ($B n_h T^2$) + Output proj input ($B T d$).
+        \item MLP: $W_1$ input ($B T d$) + SiLU input ($B T 4d$) + $W_2$ input ($B T 4d$).
+    \end{itemize}
+    Total Memory Expression (in bytes):
+    $$
+    M_{total} = \underbrace{16(12 L d_{model}^2 + V d_{model})}_{\text{Static}} + \underbrace{4 B \left[ L(14 T d_{model} + 2 n_{heads} T^2) + T d_{model} + TV \right]}_{\text{Activations}}
+    $$
+
+    \item GPT-2 XL Instantiation and Max Batch Size
+    
+    Using GPT-2 XL hyperparameters: $L=48, d_{model}=1600, V=50257, T=1024, n_{heads}=25$.
+    
+    1. Static Memory ($16P$):
+    \[ P \approx 1.56 \times 10^9 \implies 16 P \approx 24.96 \text{ GB} \]
+    
+    2. Activation Memory per Batch ($A_{batch}$):
+    \begin{align*}
+    A_{batch} &\approx 4 \times \left[ 48(14 \cdot 1024 \cdot 1600 + 2 \cdot 25 \cdot 1024^2) + 1024 \cdot 50257 \right] \\
+    &\approx 4 \times [ 48(22.9M + 52.4M) + 51.4M ] \text{ bytes} \\
+    &\approx 14.6 \text{ GB} \\
+    M_{total} &\approx 14.6 \text{ GB} \cdot \text{batch\_size} + 25.0 \text{ GB} \leq 80 \text{GB}
+    \end{align*}
+    Thus, the maximum batch size is 3.
+
+    \item 
+
+    \begin{itemize}
+        \item Update First Moment : \[ m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t \]
+        Requires 2 multiplications and 1 addition ($3 \text{ FLOPs}$).
+        
+        \item Update Second Moment : \[ v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2 \]
+        Requires 1 square, 2 multiplications, and 1 addition ($4 \text{ FLOPs}$).
+        
+        \item Compute Update: \[ \theta_t \leftarrow \theta_{t-1} - \eta \left( \frac{m_t}{\sqrt{v_t} + \epsilon} + \lambda \theta_{t-1} \right) \]
+        Requires sqrt, division, addition ($\epsilon$), multiplication ($\eta, \lambda$), and subtraction ($\approx 5 \text{ FLOPs}$).
+    \end{itemize}
+    
+    \[ \text{FLOPs}_{\text{AdamW}} \approx 12 P \]
+    
+    \item     
+    1. Total Training FLOPs ($C_{total}$):
+    \begin{itemize}
+        \item Total tokens $D = 400,000 \text{ steps} \times 1024 \text{ batch} \times 1024 \text{ ctx} \approx 4.19 \times 10^{11} \text{ tokens}$.
+        \item FLOPs per token $\approx 6 P$ (2 for forward, 4 for backward).
+        \item $C_{total} = 6 \times (1.56 \times 10^9) \times (4.19 \times 10^{11}) \approx 3.92 \times 10^{21} \text{ FLOPs}$.
+    \end{itemize}
+    
+    2. Effective Throughput:
+    \[ \text{Throughput} = \text{Peak} \times \text{MFU} = 19.5 \text{ TFLOPs} \times 0.5 = 9.75 \times 10^{12} \text{ FLOPs/s} \]
+    
+    3. Time Estimate:
+    \[ \text{Time} = \frac{3.92 \times 10^{21}}{9.75 \times 10^{12}} \approx 4.02 \times 10^8 \text{ seconds} \]
+    \[ \text{Days} = \frac{4.02 \times 10^8}{3600 \times 24} \approx \textbf{4,653 days} \]
+    
+    Training a 1.5B parameter model on 400B tokens requires roughly $4 \times 10^{21}$ FLOPs. Since we are restricted to FP32 on a single A100 (which has a relatively low FP32 peak compared to Tensor Core performance), the throughput is limited to $\approx 9.75$ TFLOPs, resulting in an impractical training time of over 12 years.
+
+\end{solution}
+
+
+
+
+
+\section{Training loop}
+
+\begin{problem}[\code{training_together}]
+    Put it together (4 points)
+    
+    Write a script that runs a training loop to train your model on user-provided input. In particular, we recommend that your training script allow for (at least) the following:
+    \begin{itemize}
+        \item Ability to configure and control the various model and optimizer hyperparameters.
+        \item Memory-efficient loading of training and validation large datasets with \code{np.memmap}.
+        \item Serializing checkpoints to a user-provided path.
+        \item Periodically logging training and validation performance (e.g., to console and/or an external service like Weights and Biases).
+    \end{itemize}
+\end{problem}
+\begin{solution*}
+    \noindent \url{https://github.com/yuanyi-350/llm-from-scratch-assignment1-basics/blob/main/scripts/train.py}
+\end{solution*}
+
+
+
+\section{Generating text}
+
+
+
+
+\section{Experiments}
+
+\begin{problem}[\code{experiment_log}] Experiment logging (3 points)
+
+For your training and evaluation code, create experiment tracking infrastructure that allows you to track your experiments and loss curves with respect to gradient steps and wallclock time.
+\end{problem}
+\begin{solution*}
+    \noindent \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/piar451p}
+\end{solution*}
+
+
+
+
+
+\begin{problem}[\code{learning_rate}]
+    Tune the learning rate ( 3 points) ( 4 H 100 hrs )
+
+    The learning rate is one of the most important hyperparameters to tune. Taking the base model you've trained, answer the following questions:
+
+    \item Perform a hyperparameter sweep over the learning rates and report the final losses (or note divergence if the optimizer diverges).
+
+    \item Folk wisdom is that the best learning rate is "at the edge of stability." Investigate how the point at which learning rates diverge is related to your best learning rate.
+\end{problem}
+\begin{solution*}
+    \sorry
+\end{solution*}
+
+
+
+
+
+\begin{problem}[\code{batch_size_experiment}]
+Batch size variations (1 point) (2 H100 hrs)
+
+Vary your batch size all the way from 1 to the GPU memory limit. Try at least a few batch sizes in between, including typical sizes like 64 and 128 .
+
+Learning curves for runs with different batch sizes. The learning rates should be optimized again if necessary.
+
+A few sentences discussing of your findings on batch sizes and their impacts on training.
+\end{problem}
+
+\begin{solution*}
+    \code{batch=128} : \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/piar451p}
+
+    \code{batch=64} : \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/yw902mp7}   
+
+    \begin{table}[h]
+    \caption{Comparison of training performance between Batch Size 64 and 128 over a fixed course of 10,000 steps. The larger batch size processes more data (Samples Seen), resulting in better validation performance despite the increased wall-clock time.}
+    \label{tab:batch_size_comparison}
+    \vspace{0.2cm}
+    \centering
+    \begin{tabular}{lcccccc}
+        \toprule
+        \textbf{Batch Size} & \textbf{Steps} & \textbf{Total Time} & \textbf{Time/Step} & \textbf{Samples Seen} & \textbf{Train Loss} & \textbf{Val Loss} \\
+        \midrule
+        64   & 10,000 & 15m 48s & $\sim$0.09s & 640,000   & 1.3945 & 1.4476 \\
+        128  & 10,000 & 34m 35s & $\sim$0.21s & 1,280,000 & \textbf{1.3944} & \textbf{1.3815} \\
+        \bottomrule
+    \end{tabular}
+    \vspace{0.2cm}
+    \end{table}
+
+    
+
+    In our experiments, we trained the model for a fixed duration of 10,000 steps across different batch sizes. As shown in Table \ref{tab:batch_size_comparison}, doubling the batch size from 64 to 128 resulted in a near-linear increase in training time (from ∼15 min to ∼34 min). While the final Training Loss was nearly identical for both runs (∼1.394), the larger batch size (128) achieved a significantly lower. 
+    
+    Validation Loss (1.3815 vs. 1.4476). This indicates that with a fixed step count, the larger batch size exposes the model to 2× more training tokens, leading to better generalization and robust learning, effectively acting as training for more epochs compared to the smaller batch size.
+
+
+
+\end{solution*}
+
+
+
+
+
+
+
+\begin{problem}[generate] 
+    Generate text (1 point)
+
+    Using your decoder and your trained checkpoint, report the text generated by your model. You may need to manipulate decoder parameters (temperature, top-p, etc.) to get fluent outputs.
+\end{problem}
+
+\begin{solution*}
+    \noindent \url{https://github.com/yuanyi-350/llm-from-scratch-assignment1-basics/blob/main/scripts/inference.py}
+
+    \begin{lstlisting}[language=Bash, caption={Example 1}]
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference   --ckpt ./wandb_test_ckpts/checkpoint_final_6000.pt    --prompt "The future of AI is?"
+Loading tokenizer from ./data/tinystoriesv2-gpt4-train_vocab.pkl and ./data/tinystoriesv2-gpt4-train_merges.pkl...
+Loading model from ./wandb_test_ckpts/checkpoint_final_6000.pt...
+
+The future of AI is? I can see the bird!"
+Lily and Ben felt sad. They wanted to help the bird. They tried to think of a way to save the bird. They looked around and saw the bird in the tree. It was flying high and it was        
+    \end{lstlisting}
+
+    \begin{lstlisting}[language=Bash, caption={Example 2}]
+ stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference     --ckpt ./wandb_test_ckpts/checkpoint_final_6000.pt     --prompt "Who are you?"
+
+Loading tokenizer from ./data/tinystoriesv2-gpt4-train_vocab.pkl and ./data/tinystoriesv2-gpt4-train_merges.pkl...
+
+Loading model from ./wandb_test_ckpts/checkpoint_final_6000.pt...
+
+Who are you? You can't make friends with a dog and a puzzle. You can be your friend."
+
+Tom was not happy and scared. He did not like the puzzle. He did not like the dog. He felt angry and sad. He wanted to make     
+    \end{lstlisting}
+
+
+    \begin{lstlisting}[language=Bash, caption={Example 3}]
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference     --ckpt ./wandb_test_ckpts/checkpoint_final_10000.pt     --prompt "The little robot wanted to learn how to love."     --temp 1.2
+
+Loading tokenizer from ./data/tinystoriesv2-gpt4-train_vocab.pkl and ./data/tinystoriesv2-gpt4-train_merges.pkl...
+
+Loading model from ./wandb_test_ckpts/checkpoint_final_10000.pt...
+
+ He started to dance, jump, and shake. Max clapped his paws and jumped so high that he touched the sky! Everyone was happy and clapped for Max. The day became a beautiful day for Max.
+
+<|endoftext|>
+
+
+Once upon a time,
+    \end{lstlisting}
+
+
+    \begin{lstlisting}[language=Bash, caption={Example 4}]
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference     --ckpt ./wandb_test_ckpts/checkpoint_final_10000.pt     --prompt "Tom wanted to learn how to fly."     --temp 1.2
+
+Loading tokenizer from ./data/tinystoriesv2-gpt4-train_vocab.pkl and ./data/tinystoriesv2-gpt4-train_merges.pkl...
+
+Loading model from ./wandb_test_ckpts/checkpoint_final_10000.pt...
+
+
+"Mom, can you teach me?" Tom asked. His mom smiled and said, "Yes, I can teach you. Just wait in line and you need a clean order."
+
+Tom looked in the big box under his bed. He found 
+    \end{lstlisting}
+
+
+    \begin{lstlisting}[language=Bash, caption={Example 5}]
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference    --ckpt ./wandb_test_ckpts/checkpoint_final_10000.pt    --prompt "Tom wanted to learn how to fly."    --temp 0.7
+Loading tokenizer from ./data/tinystoriesv2-gpt4-train_vocab.pkl and ./data/tinystoriesv2-gpt4-train_merges.pkl...
+Loading model from ./wandb_test_ckpts/checkpoint_final_10000.pt...
+
+He asked his mom, "Can I teach you how to fly?" His mom said, "Yes, but you must be very careful."
+Tom was very happy. He showed his friends how to fly. They tried to fly, but they could        
+    \end{lstlisting}
+    
+\end{solution*}
+
+
+
+\begin{table}[h]
+    \centering
+    \caption{Ablation Study Results on TinyStories (\code{batch_size=64, train_steps=10000}). The baseline model uses Pre-Norm, RoPE, and SwiGLU activation. "Fail" indicates the loss exceeded the assignment threshold of 1.45.}
+    \label{tab:ablation_results}
+    \vspace{0.2cm}
+    \small
+    \begin{tabular}{l l c c c l}
+        \toprule
+        \textbf{Experiment} & \textbf{Configuration} & \textbf{Val Loss} & \textbf{Val PPL} & \textbf{Diff (\%)} & \textbf{Status}\\
+        \midrule
+        \textbf{Baseline} & Pre-Norm + SwiGLU + RoPE & 1.44 & 4.22 & 0\% \\
+        \midrule
+        No-Norm (High LR) & None, LR $10^{-3}$ & 1.51 & 4.53 & +7.3\% & Unstable (Overflows) \\
+        No-Norm (Low LR)  & None, LR $3\times10^{-4}$ & 1.65 & 5.22 & +23.7\% & Stable but Slow \\
+        \bottomrule
+        Post-Norm & Post-Norm & 1.47 & 4.34 & +2.8\% & Regression \\
+        No-RoPE   & Remove Positional Emb. & 1.54 & 4.68 & +10.9\% & Loss of Syntax \\
+        SiLU      & SiLU (Parameter Matched) & 1.47 & 4.37 & +3.5\% & Lack of Gating \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+\vspace{2cm}
+
+
+
+\begin{problem}[\code{layer_norm_ablation}]
+    Remove RMSNorm and train (1 point) (1 H100 hr)
+
+    Remove all of the RMSNorms from your Transformer and train. What happens at the previous optimal learning rate? Can you get stability by using a lower learning rate?
+\end{problem}
+\begin{solution*}
+    \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/lnkesxh8/}
+    
+    In this experiment, I removed all RMSNorm layers from the Transformer architecture (replacing them with Identity functions) while keeping all other hyperparameters identical to the baseline, including the optimal learning rate found in previous experiments.
+
+    The No-Norm model converged slower and showed higher variance in the loss curve compared to the baseline. Specifically, around step 1300, I observed \code{RuntimeWarning: overflow encountered in exp}  during the perplexity calculation. This indicates that the training loss experienced sudden, transient spikes, likely due to exploding gradients or unconstrained activation magnitudes, which are normally mitigated by Layer Normalization.
+
+    We can get stability by using a lower learning rate, but at a significant cost to convergence speed. To verify this, I conducted an additional experiment with \code{max_LR=3e−4}. As shown in Table~\ref{tab:ablation_results}, the model converged much slower, reaching a final validation loss of 1.65 (PPL ~5.22).
+
+\end{solution*}
+
+
+
+\begin{problem}[\code{pre_norm_ablation}]
+    Implement post-norm and train (1 point) (1 H100 hr)
+
+    Modify your pre-norm Transformer implementation into a post-norm one. Train with the post-norm model and see what happens.
+\end{problem}
+\begin{solution*}
+    \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/ei73gqyy}
+
+    The degradation is relatively small (2.8\%) likely because the model is shallow (only 4 layers). The instability of Post-Norm typically exacerbates with network depth. In deeper networks (e.g., >12 layers), this gap would likely widen significantly or lead to divergence.
+\end{solution*}
+
+
+
+
+\begin{problem}[\code{no_pos_emb}]
+    Implement NoPE (1 point) (1 H100 hr)
+
+    Modify your Transformer implementation with RoPE to remove the position embedding information entirely, and see what happens.
+\end{problem}
+\begin{solution*}
+    \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/bdnd5cbc}
+
+    Without RoPE, the self-attention mechanism becomes largely permutation invariant within its receptive field (ignoring the weak implicit signal from causal masking). The model cannot effectively distinguish between "Dog bites Man" and "Man bites Dog", nor can it track long-range dependencies based on relative distance.   
+\end{solution*}
+
+
+
+\begin{problem}[\code{swiglu_ablation}]
+    SwiGLU vs. SiLU (1 point) (1 H100 hr)
+\end{problem}
+\begin{solution*}
+    \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/3udrpheb}
+    
+    The superior performance of SwiGLU validates the effectiveness of the Gated Linear Unit (GLU) mechanism. SwiGLU performs a component-wise product of the signal and the gate (x⊙Swish(g)), allowing the network to selectively control information flow more granularly than a simple element-wise non-linearity like SiLU.
+\end{solution*}
+
+
+\begin{problem}[\code{main_experiment}]
+    Experiment on OWT (2 points) (3 H100 hrs)
+
+    Train your language model on OpenWebText with the same model architecture and total training iterations as TinyStories. How well does this model do?
+\end{problem}
+\begin{solution*}\setlength{\parindent}{0pt}
+
+    \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/jl7j7vxo}
+    
+    \url{https://wandb.ai/kysyy1-pku/cs336-playground/runs/r29w31f6}
+
+    Experimental Setup: We attempted to scale up the training from TinyStories to the OpenWebText (OWT) dataset. The model architecture was scaled to approximate GPT-2 Small (\code{dmodel=768, nlayers=12, nheads=12}). The experiment was conducted on a single NVIDIA RTX 5090 (32GB) for a duration of approximately 1 hour.
+
+    Results: Training Loss: ≈ 4.0, Validation Loss: ≈ 6.0 (PPL ≈ 403)
+
+    Analysis of Overfitting: The results indicate severe overfitting and instability, evidenced by the significant divergence between training and validation loss (Generalization Gap ≈2.0).
+
+    Batch Size Constraint: The primary cause is identified as the insufficient batch size. Due to memory constraints (OOM errors) encountered with the unoptimized FP32 implementation, we were restricted to a physical batch size of roughly 16 to 24.
+
+    Noisy Gradients: Such a small batch size results in high-variance gradient estimates. Instead of learning the generalizable underlying distribution of the large-scale OWT dataset, the model likely memorized the noise within the limited number of batches it processed during the short 1-hour run.
+
+    Memory Bottleneck: Despite the 32GB VRAM of the RTX 5090, the memory overhead of maintaining full-precision activations and the absence of optimization techniques (e.g., FlashAttention or Gradient Checkpointing) prevented scaling the batch size to a stable range (e.g., ≥64) required for this dataset complexity.
+
+    \vspace{2cm}
+    \begin{lstlisting}[caption={Examples}]
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference     --merges_file ./data/owt_train_merges.pkl     --vocab_file ./data/owt_train_vocab.pkl     --ckpt ./wandb_test_ckpts_owt/checkpoint_9000.pt     --prompt "Who are you?"     --temp 0.7
+Loading tokenizer from ./data/owt_train_vocab.pkl and ./data/owt_train_merges.pkl...
+Loading model from ./wandb_test_ckpts_owt/checkpoint_9000.pt...
+
+
+And I’m not going to be on the street for a while. And I’m really going to be on the road. And I’m going to be here with my father and I know that.
+
+And you’
+----------------------------------------
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference     --merges_file ./data/owt_train_merges.pkl     --vocab_file ./data/owt_train_vocab.pkl     --ckpt ./wandb_test_ckpts_owt/checkpoint_9000.pt     --prompt "I love you"     --temp 0.7
+Loading tokenizer from ./data/owt_train_vocab.pkl and ./data/owt_train_merges.pkl...
+Loading model from ./wandb_test_ckpts_owt/checkpoint_9000.pt...
+, and we're very excited to play. We're all going to be great, and we're going to be a great team, and we're going to be good in the future.
+
+"I'm not going to be a big fan
+----------------------------------------
+stu2400010766@lfs-dev:~/cs336$ uv run python -m scripts.inference     --merges_file ./data/owt_train_merges.pkl     --vocab_file ./data/owt_train_vocab.pkl     --ckpt ./wandb_test_ckpts_owt/checkpoint_9000.pt     --prompt "what's the future of AI?"     --temp 0.7
+Loading tokenizer from ./data/owt_train_vocab.pkl and ./data/owt_train_merges.pkl...
+Loading model from ./wandb_test_ckpts_owt/checkpoint_9000.pt...
+
+
+"I think that's the kind of thing I've talked about," said Greg Johnson, "I think that it's the way that we've done it. It's the way we're working and the way we do it, and it
+----------------------------------------
+    \end{lstlisting}
+
+
+\end{solution*}
+
+
+
+\begin{problem}[\code{leaderboard}]
+    Leaderboard (6 points) (10 H100 hrs)
+
+    You will train a model under the leaderboard rules above with the goal of minimizing the validation loss of your language model within 1.5 H 100 -hour.
+\end{problem}
+\begin{solution*}
+
+\end{solution*}
+
+
+\newpage
+\appendix
+
+\section{Experiments Logs}
+
+
+\begin{lstlisting}[caption={Time Consumption}, label={lst:owt_bpe_time_cost}]
+stu2400010766@lfs-dev:~/cs336/cs336_basics$ uv run python -m scripts.data_prepare \
+ --input_path "/data/share/hw1-data/owt_train.txt"
+Training new Tokenizer with vocab_size=32000...
+Pre-tokenization complete in 80.90s
+Statistics: 6601892 unique pre-tokens, 2471753092 total tokens.
+Merging token 500/32000 | Time: 377.53s
+Merging token 1000/32000 | Time: 524.58s
+Merging token 2000/32000 | Time: 625.97s
+Merging token 3000/32000 | Time: 722.07s
+Merging token 4000/32000 | Time: 770.46s
+Merging token 5000/32000 | Time: 846.81s
+Merging token 10000/32000 | Time: 978.31s
+Merging token 15000/32000 | Time: 1086.02s
+Merging token 20000/32000 | Time: 1146.59s
+Merging token 25000/32000 | Time: 1198.29s
+Merging token 30000/32000 | Time: 1239.53s
+\end{lstlisting}
+
+\end{document}
+
+

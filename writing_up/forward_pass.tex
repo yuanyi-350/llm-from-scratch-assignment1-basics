@@ -1,0 +1,188 @@
+\documentclass[a4paper,12pt]{article}
+
+\usepackage{ctex}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz-cd}
+\usepackage{geometry}
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\setlength{\parindent}{0pt}
+
+\title{反向传播推导笔记}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+
+\paragraph{Affine Forward Pass}
+
+设输入为 $X$, 权重为 $W$, 输出为 $Y$ ($out$)
+\begin{itemize}
+    \item 输入 $X$: 形状为 $(N, D)$
+    \item 权重 $W$: 形状为 $(D, M)$
+    \item 输出 $Y = XW$: 形状为 $(N, M)$
+    \item 损失 $L$: 标量
+\end{itemize}
+
+\paragraph{Affine Backward Pass}
+
+$$
+\left(\begin{array}{ll}
+x_{11} & x_{12} \\
+x_{21} & x_{22} \\
+x_{31} & x_{32}
+\end{array}\right) \xrightarrow{\left(\begin{array}{ll}
+y_{11} & y_{12} \\
+y_{21} & y_{21}
+\end{array}\right)}\left(\begin{array}{ll}
+x_{11} y_{11}+x_{21} y_{21} & x_{11} y_{12}+x_{22} y_{22} \\
+x_{21} y_{11}+x_{22} y_{21} & x_{21} y_{12}+x_{22} y_{22} \\
+x_{11} y_{11}+x_{32} y_{21} & x_{31} y_{12}+x_{32} y_{22}
+\end{array}\right) \longrightarrow L
+$$
+
+求 Loss 对输入 $X$ 的梯度 $\frac{\partial L}{\partial X}$, 其形状应与 $X$ 相同, 即 $(N, D)$. 
+已知上游梯度 $dout = \frac{\partial L}{\partial Y}$, 形状为 $(N, M)$. 
+
+\subparagraph{微观视角}
+
+考虑任意元素 $X_{ij}$ 对 $L$ 的影响. $X_{ij}$ 参与了 $Y$ 第 $i$ 行所有元素的计算.
+
+\begin{figure}[h]
+    \centering
+    \begin{tikzcd}
+        && {out_{21}} \\
+        {x_{21}} &&&& L \\
+        && {out_{22}}
+        \arrow[from=1-3, to=2-5]
+        \arrow[from=2-1, to=1-3]
+        \arrow[from=2-1, to=3-3]
+        \arrow[from=3-3, to=2-5]
+    \end{tikzcd}
+    \caption{Affine}
+\end{figure}
+
+
+\begin{itemize}
+    \item $\dfrac{\partial L}{\partial Y_{ik}} = (dout)_{ik}$
+    \item $\dfrac{\partial Y_{ik}}{\partial X_{ij}} = W_{jk}$
+\end{itemize}
+
+根据多元复合函数的链式法则: 
+$$
+\frac{\partial L}{\partial X_{ij}} = \sum_{k=1}^M \frac{\partial L}{\partial Y_{ik}} \cdot \frac{\partial Y_{ik}}{\partial X_{ij}}
+= \sum_{k=1}^M (dout)_{ik} \cdot W_{jk} 
+= (dout \cdot W^T)_{ij}
+$$
+
+矩阵形式为 $\frac{\partial L}{\partial X} = dout \cdot W^T$ , 维度检查: $(N, M) \times (M, D) = (N, D)$, 与 $X$ 形状一致.
+
+同理可证对权重 $W$ 的梯度 $\frac{\partial L}{\partial W} = X^T \cdot dout$
+
+\subparagraph{理解} 函数 $L$ 是中间变量 $u, v, w$ 的函数 $L=f(u, v, w)$
+而 $u, v, w$ 又全都是 $x$ 的函数 $u=g(x), \quad v=h(x), \quad w=k(x)$
+则 $L$ 对 $x$ 的导数
+
+$$
+\frac{d L}{d x}=\frac{\partial L}{\partial u} \cdot \frac{d u}{d x}+\frac{\partial L}{\partial v} \cdot \frac{d v}{d x}+\frac{\partial L}{\partial w} \cdot \frac{d w}{d x}
+$$
+
+这是因为记 $\varphi(x) = (g(x), h(x), k(x))$, 然后 $L = f(\varphi(x))$ 即知
+
+$$
+DL(x) = Df(\varphi(x)) \circ D\varphi(x)
+$$
+
+也就是
+
+$$
+\frac{d L}{d x}=\nabla L(\varphi(x)) \cdot \nabla \varphi(x) 
+$$
+
+
+
+
+\paragraph{Layernorm Forward Pass}
+
+\paragraph{Layernorm Backward Pass}
+
+\begin{figure}[h]
+    \centering
+    \begin{tikzcd}
+    & {\text{mean}\;\mu} \\
+    x && {\hat{x_i} = \dfrac{x_i - \mu}{\sqrt{\sigma^2 + \varepsilon}}} & L \\
+    & {\text{var}\;\sigma^2}
+    \arrow[from=1-2, to=2-3]
+    \arrow[from=2-1, to=1-2]
+    \arrow[from=2-1, to=2-3]
+    \arrow[from=2-1, to=3-2]
+    \arrow[from=2-3, to=2-4]
+    \arrow[from=3-2, to=2-3]
+    \end{tikzcd}
+    \caption{LayerNorm}
+\end{figure}
+
+
+假设输入 $x$ 的形状为 $(N, D)$ ，其中 $N$ 是样本数，$D$ 是特征维度。Layer Normalization 对每个样本 $x_i$(行向量，长度为 $D$ ) 独立进行归一化。
+
+对于第 $i$ 个样本 $x_i(i \in\{1, \ldots, N\})$ ，其元素为 $x_{i j}(1 \le j \le D)$
+\begin{enumerate}
+    \item 均值(Mean) $\mu_i=\frac{1}{D} \sum_{j=1}^D x_{i j}$
+    \item 方差(Variance) $\sigma_i^2=\frac{1}{D} \sum_{j=1}^D\left(x_{i j}-\mu_i\right)^2$
+    \item 标准差(Standard Deviation) $\sigma_i=\sqrt{\sigma_i^2+\epsilon}$
+    \item 归一化(Normalize) $\hat{x}_{i j}=\frac{x_{i j}-\mu_i}{\sigma_i}$
+\end{enumerate}
+
+计算 Loss $L$ 对输入 $x_{ij}$ 的梯度. 令 $g_{ij} = \frac{\partial L}{\partial \hat{x}_{ij}} = \frac{\partial L}{\partial y_{ij}} \cdot \gamma_j$. 
+根据多元微积分的链式法则
+
+$$
+\frac{\partial L}{\partial x_{ij}} = 
+\underbrace{\frac{\partial L}{\partial \hat{x}_{ij}} \frac{\partial \hat{x}_{ij}}{\partial x_{ij}}}_{\text{Term 1}} + 
+\underbrace{\frac{\partial L}{\partial \sigma_i^2} \frac{\partial \sigma_i^2}{\partial x_{ij}}}_{\text{Term 2}} + 
+\underbrace{\frac{\partial L}{\partial \mu_i} \frac{\partial \mu_i}{\partial x_{ij}}}_{\text{Term 3}}
+$$
+
+\subparagraph{Term 1} 由于 $\hat{x}_{ij} = (x_{ij} - \mu_i)\sigma_i^{-1}$, 固定 $\mu, \sigma$ 时: 
+$$
+\frac{\partial \hat{x}_{ij}}{\partial x_{ij}} = \frac{1}{\sigma_i} \implies \text{Term 1} = \frac{g_{ij}}{\sigma_i}
+$$
+
+\subparagraph{Term 2} 首先计算 $L$ 对方差的总梯度(需要对特征维度 $D$ 进行聚合) : 
+$$
+\begin{aligned}
+\frac{\partial L}{\partial \sigma_i^2} &= \sum_{k=1}^D \frac{\partial L}{\partial \hat{x}_{ik}} \frac{\partial \hat{x}_{ik}}{\partial \sigma_i^2} 
+= \sum_{k=1}^D g_{ik} \cdot \left( -\frac{1}{2} \frac{x_{ik} - \mu_i}{(\sigma_i^2 + \epsilon)^{3/2}} \right)
+= -\frac{1}{2\sigma_i^2} \sum_{k=1}^D (g_{ik} \hat{x}_{ik}) \\
+\frac{\partial \sigma_i^2}{\partial x_{ij}} &= \frac{\partial}{\partial x_{ij}} \left( \frac{1}{D} \sum_{k=1}^D (x_{ik} - \mu_i)^2 \right) = \frac{2(x_{ij} - \mu_i)}{D} = \frac{2 \hat{x}_{ij} \sigma_i}{D}
+\end{aligned}
+$$
+
+两者相乘得到 Term 2: 
+$$
+\text{Term 2} = \left( -\frac{1}{2\sigma_i^2} \sum_{k=1}^D g_{ik} \hat{x}_{ik} \right) \cdot \left( \frac{2 \hat{x}_{ij} \sigma_i}{D} \right) 
+= -\frac{1}{D \sigma_i} \hat{x}_{ij} \sum_{k=1}^D (g_{ik} \hat{x}_{ik})
+$$
+
+\subparagraph{Term 3} 
+首先计算 $L$ 对均值的总梯度: 
+$$
+\frac{\partial L}{\partial \mu_i} = \sum_{k=1}^D g_{ik} \frac{\partial \hat{x}_{ik}}{\partial \mu_i} 
+= \sum_{k=1}^D g_{ik} \left( -\frac{1}{\sigma_i} \right) 
+= -\frac{1}{\sigma_i} \sum_{k=1}^D g_{ik} , \qquad
+\frac{\partial \mu_i}{\partial x_{ij}} = \frac{1}{D}
+$$
+两者相乘得到 Term 3: 
+$$
+\text{Term 3} = -\frac{1}{D \sigma_i} \sum_{k=1}^D g_{ik}
+$$
+
+\subparagraph{最终}
+$$
+\frac{\partial L}{\partial x_{ij}} = \frac{1}{D \sigma_i} \left[ D \cdot g_{ij} - \hat{x}_{ij} \left( \sum_{k=1}^D g_{ik} \hat{x}_{ik} \right) - \sum_{k=1}^D g_{ik} \right]
+$$
+
+\end{document}
